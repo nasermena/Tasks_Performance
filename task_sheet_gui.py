@@ -17,7 +17,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # ===================== CONFIG =====================
-SERVICE_ACCOUNT_FILE = "service_account.json"
+SERVICE_ACCOUNT_FILE = "C:\\Users\\Naser Rahal\\ServiceAccountKey\\service_account.json"
 SHEET_ID = "19Juc5u43K4Xx3vU9yeyZVx5K-aRdOOm_c5etpfpcsWQ"
 WORKSHEET_TITLE = "Sheet1442"   # غيّرها لاسم التبويب عندك
 
@@ -133,9 +133,7 @@ class DatePage(tk.Frame):
 
         buttons = tk.Frame(self)
         buttons.pack(pady=20)
-        back_btn = tk.Button(buttons, text="رجوع", width=16, command=lambda: controller.show_frame("StartPage"))
         next_btn = tk.Button(buttons, text="التالي", width=16, command=self.on_next)
-        back_btn.grid(row=0, column=0, padx=10)
         next_btn.grid(row=0, column=1, padx=10)
 
     def on_next(self):
@@ -326,9 +324,8 @@ class PostAddPage(tk.Frame):
         self.controller.frames["TaskFormPage"].event_generate_show()
 
     def finish_work(self):
-        # Reset session and go back to date page
-        self.controller.reset_session()
-        self.controller.show_frame("DatePage")
+        # إنهاء تشغيل الكود (إغلاق نافذة Tkinter)
+        self.controller.destroy()
 
 if __name__ == "__main__":
     app = App()
