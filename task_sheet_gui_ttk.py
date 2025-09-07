@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Task Sheet GUI for Google Sheets
-- GUI flow: Start -> Pick Date -> Fill Task -> Post-Add actions
+Task Sheet GUI for Google Sheets (TTK Styled UI)
+- Visual refresh: ttk theme, top bar, label frames (cards), status bar
+- Flow: Start -> Pick Date -> Fill Task -> Post-Add actions
 - Requires: pip install gspread google-auth tkcalendar
 - Auth: Service Account JSON (share the target sheet with the service account email)
 """
-
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from tkcalendar import Calendar
@@ -54,6 +54,7 @@ def append_task_row(row_values):
     ws.append_row(row_values, value_input_option="USER_ENTERED")
     return ws
 
+
 # ===================== GUI =====================
 class App(tk.Tk):
     def __init__(self):
@@ -61,7 +62,7 @@ class App(tk.Tk):
         self.title("إدارة تسجيل المهام - Google Sheets")
         self.geometry("980x780")
         self.resizable(False, False)
-        
+
         # --- Theme & Style ---
         style = ttk.Style()
         try:
@@ -80,7 +81,7 @@ class App(tk.Tk):
         style.configure("Card.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
 
         # Shared state
-        self.selected_date = None  # datetime.date
+        self.selected_date = None
         self.selected_day_abbr = None
         self.selected_month_abbr = None
 
@@ -103,8 +104,8 @@ class App(tk.Tk):
         container.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
-        
-        # Frames
+
+        # Frames (pages)
         self.frames = {}
         for F in (StartPage, DatePage, TaskFormPage, PostAddPage):
             frame = F(parent=container, controller=self)
@@ -124,7 +125,6 @@ class App(tk.Tk):
 
     def set_date(self, dt: date):
         self.selected_date = dt
-        # Compute day / month abbreviations using fixed tables
         weekday = dt.weekday()  # Mon=0..Sun=6
         self.selected_day_abbr = DAY_ABBR[weekday]
         self.selected_month_abbr = MONTH_ABBR[dt.month - 1]
@@ -133,7 +133,6 @@ class App(tk.Tk):
         self.selected_date = None
         self.selected_day_abbr = None
         self.selected_month_abbr = None
-        # Clear last defaults
         for k in self.last_defaults:
             self.last_defaults[k] = ""
 
@@ -154,19 +153,19 @@ class DatePage(tk.Frame):
         super().__init__(parent)
         self.controller = controller
 
-        title = ttk.Label(self, text="اختر التاريخ", style="Header.TLabel") 
+        title = ttk.Label(self, text="اختر التاريخ", style="Header.TLabel")
         title.pack(pady=16)
 
         today = datetime.today()
         self.calendar = Calendar(self, selectmode="day", year=today.year, month=today.month, day=today.day, date_pattern="yyyy-mm-dd")
         self.calendar.pack(pady=10)
 
-
-        self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")   
+        self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")
         self.info_lbl.pack(pady=8)
-        
+
         controls = ttk.Frame(self)
         controls.pack(pady=16)
+
         next_btn = ttk.Button(controls, text="التالي", command=self.on_next)
         next_btn.grid(row=0, column=1, padx=8)
 
@@ -188,7 +187,6 @@ class TaskFormPage(tk.Frame):
 
         header = ttk.Label(self, text="إدخال تفاصيل المهمة", style="Header.TLabel")
         header.grid(row=0, column=0, columnspan=4, pady=(8, 12), sticky="e")
-
 
         # Cards
         left_card  = ttk.Labelframe(self, text="تفاصيل المهمة", style="Card.TLabelframe")
@@ -275,12 +273,10 @@ class TaskFormPage(tk.Frame):
         self.bind("<<ShowPage>>", self.on_show)
 
     def event_generate_show(self):
-        # helper to trigger prefill when the frame is raised
         self.event_generate("<<ShowPage>>")
 
     def on_show(self, event=None):
         d = self.controller.last_defaults
-        # Prefill
         self.var_project.set(d.get("Project",""))
         self.var_duration.set(d.get("Task duration (hour)",""))
         self.var_level.set(d.get("Level",""))
@@ -297,8 +293,6 @@ class TaskFormPage(tk.Frame):
             messagebox.showerror("خطأ", "يرجى اختيار التاريخ أولاً.")
             return
 
-        # Build the row in the exact order of HEADERS
-        # Get big text fields
         prompt = self.txt_prompt.get("1.0", "end").strip()
         just   = self.txt_just.get("1.0", "end").strip()
         feed   = self.txt_feedback.get("1.0", "end").strip()
@@ -325,7 +319,7 @@ class TaskFormPage(tk.Frame):
             messagebox.showerror("فشل الإضافة", f"حدث خطأ أثناء الإضافة إلى Google Sheets:\n{e}")
             return
 
-        # Save defaults for project-related fields
+        # Save defaults
         self.controller.last_defaults["Project"] = self.var_project.get().strip()
         self.controller.last_defaults["Task duration (hour)"] = self.var_duration.get().strip()
         self.controller.last_defaults["Level"] = self.var_level.get().strip()
@@ -336,7 +330,8 @@ class TaskFormPage(tk.Frame):
 
         # Go to post-add page
         self.controller.show_frame("PostAddPage")
-        # Clear only non-default fields for next time user returns here
+
+        # Clear non-default fields
         self.var_task_id.set("")
         self.txt_prompt.delete("1.0", "end")
         self.txt_just.delete("1.0", "end")
@@ -361,9 +356,7 @@ class PostAddPage(tk.Frame):
         btn_finish.grid(row=0, column=1, padx=8, pady=4)
 
     def add_new_task(self):
-        # Keep same date and prefilled defaults
         self.controller.show_frame("TaskFormPage")
-        # Trigger prefill on TaskFormPage
         self.controller.frames["TaskFormPage"].event_generate_show()
 
     def finish_work(self):
