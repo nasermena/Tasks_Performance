@@ -1,89 +1,110 @@
 # -*- coding: utf-8 -*-
 """
 Task Sheet GUI for Google Sheets
-- GUI flow: Start -> Pick Date -> Fill Task -> Post-Add actions
-- Requires: pip install gspread google-auth tkcalendar
-- Auth: Service Account JSON (share the target sheet with the service account email)
+- التدفق: البداية -> اختيار التاريخ -> تعبئة نموذج المهمة -> ما بعد الإضافة
+- المتطلبات: pip install gspread google-auth tkcalendar
+- الثيم الداكن/النهاري (اختياري): pip install sv-ttk
+- المصداقية: حفظ الصفوف باستخدام USER_ENTERED ليطبّق قواعد Google Sheets تلقائيًا.
 """
 
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from tkcalendar import Calendar
 from datetime import datetime, date
+import re
+import os
 
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ===================== CONFIG =====================
-SERVICE_ACCOUNT_FILE = "C:\\Users\\Naser Rahal\\ServiceAccountKey\\service_account.json"
+# محاولة استيراد sv_ttk (اختياري). إن لم يوجد، نستمر بدون كسر البرنامج.
+try:
+    import sv_ttk  # Sun Valley ttk theme
+except Exception:
+    sv_ttk = None
+
+# ===================== الإعدادات =====================
+# ملاحظة: حدّث المسار والـ Sheet/Worksheet حسب بيئتك
+SERVICE_ACCOUNT_FILE = r"C:\Users\Naser Rahal\ServiceAccountKey\service_account.json"
 SHEET_ID = "19Juc5u43K4Xx3vU9yeyZVx5K-aRdOOm_c5etpfpcsWQ"
 WORKSHEET_TITLE = "Sheet1442"   # غيّرها لاسم التبويب عندك
 
-
-
-# Exact headers order in the Google Sheet
+# ترتيب الأعمدة في الشيت (يجب أن يطابق ترتيب الصف المُرسل)
 HEADERS = [
     "Task ID", "The prompt", "Justification", "Feedback", "rating", "submitted time",
     "Project", "Task duration (hour)", "Level", "Verdict",
     "Date", "Day", "Month"
 ]
 
-# Month and day abbreviations (fixed English mapping to avoid locale issues)
+# اختصارات الأشهر/الأيام (بالإنجليزية لتفادي مشاكل locale)
 MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 DAY_ABBR   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-# ===================== Google Sheets Helper =====================
+# نمط Task ID المطلوب (24 خانة hex صغيرة)
+HEX24_RE = re.compile(r'^[0-9a-f]{24}$')
+
+# ===================== Google Sheets Helpers =====================
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# كاش بسيط للورقة لتقليل فتح الاتصال في كل إضافة
+_WS = None
 
 def get_worksheet():
+    """إرجاع Worksheet مع التأكد من وجود العناوين في الصف الأول (مرة واحدة)."""
+    global _WS
+    if _WS is not None:
+        return _WS
+
     creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     gc = gspread.authorize(creds)
+    sh = gc.open_by_key(SHEET_ID)       # فتح بالمعرف
+    ws = sh.worksheet(WORKSHEET_TITLE)  # تبويب محدد بالاسم
 
-    sh = gc.open_by_key(SHEET_ID)                 # ← فتح بالـID (أدق من open بالاسم)
-    ws = sh.worksheet(WORKSHEET_TITLE)            # ← تبويب محدد بالاسم
-    # ثبّت العناوين فقط إذا الصف 1 فارغ (لا تمسح بياناتك)
     header_row = ws.row_values(1)
     if not any(header_row):
         ws.insert_row(HEADERS, index=1)
+
+    _WS = ws
     return ws
 
-
 def append_task_row(row_values):
+    """إضافة صف واحد إلى الشيت بخيار USER_ENTERED (يحاكي إدخال المستخدم)."""
     ws = get_worksheet()
     ws.append_row(row_values, value_input_option="USER_ENTERED")
     return ws
 
-# ===================== GUI =====================
+# ===================== الواجهة =====================
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("إدارة تسجيل المهام - Google Sheets")
         self.geometry("980x780")
         self.resizable(False, False)
-        
-        # --- Theme & Style ---
-        style = ttk.Style()
+
+        # --- الثيم والنمط العام ---
+        self.style = ttk.Style()
         try:
-            style.theme_use("clam")
-        except:
+            # ثيم افتراضي مستقر يعرض ألوان الحقول بوضوح
+            self.style.theme_use("clam")
+        except tk.TclError:
             pass
 
         BASE_FONT = ("Segoe UI", 11)
         TITLE_FONT = ("Segoe UI", 18, "bold")
 
-        style.configure(".", font=BASE_FONT)
-        style.configure("TButton", padding=(10, 6))
-        style.configure("TLabel", padding=(2, 2))
-        style.configure("Header.TLabel", font=TITLE_FONT)
-        style.configure("Card.TLabelframe", padding=12)
-        style.configure("Card.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
+        self.style.configure(".", font=BASE_FONT)
+        self.style.configure("TButton", padding=(10, 6))
+        self.style.configure("TLabel", padding=(2, 2))
+        self.style.configure("Header.TLabel", font=TITLE_FONT)
+        self.style.configure("Card.TLabelframe", padding=12)
+        self.style.configure("Card.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
 
-        # Shared state
-        self.selected_date = None  # datetime.date
+        # حالة مشتركة للجلسة
+        self.selected_date = None
         self.selected_day_abbr = None
         self.selected_month_abbr = None
 
+        # قيم افتراضية تُحفظ مؤقتًا داخل الجلسة
         self.last_defaults = {
             "Project": "",
             "Task duration (hour)": "",
@@ -91,30 +112,46 @@ class App(tk.Tk):
             "Verdict": "",
         }
 
-        # Top bar
-        topbar = tk.Frame(self, bg="#0ea5e9", height=52)
-        topbar.grid(row=0, column=0, sticky="we")
-        top_title = tk.Label(topbar, text="تسجيل مهام اليوم على Google Sheets",
-                             bg="#0ea5e9", fg="white", font=("Segoe UI", 16, "bold"))
-        top_title.pack(side="right", padx=16)
+        # شريط علوي
+        self.topbar = tk.Frame(self, bg="#0ea5e9", height=52)
+        self.topbar.grid(row=0, column=0, sticky="we")
+        self.top_title = tk.Label(
+            self.topbar, text="تسجيل مهام اليوم على Google Sheets",
+            bg="#0ea5e9", fg="white", font=("Segoe UI", 16, "bold")
+        )
+        self.top_title.pack(side="right", padx=16)
 
-        # Container for pages
+        # الحاوية العامة للصفحات
         container = tk.Frame(self)
         container.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
-        
-        # Frames
+
+        # تهيئة الصفحات
         self.frames = {}
         for F in (StartPage, DatePage, TaskFormPage, PostAddPage):
             frame = F(parent=container, controller=self)
             self.frames[F.__name__] = frame
             frame.grid(row=0, column=0, sticky="nsew")
 
-        # Status bar
+        # شريط الحالة
         self.status = tk.StringVar(value="Ready")
         status_lbl = ttk.Label(self, textvariable=self.status, anchor="w")
-        status_lbl.grid(row=2, column=0, sticky="we", padx=8, pady=(0,8))
+        status_lbl.grid(row=2, column=0, sticky="we", padx=8, pady=(0, 8))
+
+        # قائمة "عرض" للثيمات ووضع داكن/نهاري
+        menubar = tk.Menu(self)
+        view_menu = tk.Menu(menubar, tearoff=False)
+
+        themes_menu = tk.Menu(view_menu, tearoff=False)
+        for name in self.style.theme_names():
+            themes_menu.add_command(label=name, command=lambda n=name: self._set_theme(n))
+        view_menu.add_cascade(label="الثيمات (TTK)", menu=themes_menu)
+        view_menu.add_separator()
+        view_menu.add_command(label="تبديل الوضع الليلي/النهاري", command=self._toggle_dark)
+
+        menubar.add_cascade(label="عرض", menu=view_menu)
+        self.config(menu=menubar)
 
         self.show_frame("StartPage")
 
@@ -123,20 +160,93 @@ class App(tk.Tk):
         frame.tkraise()
 
     def set_date(self, dt: date):
+        """تعيين التاريخ المختار وتوليد اختصارات اليوم/الشهر."""
         self.selected_date = dt
-        # Compute day / month abbreviations using fixed tables
         weekday = dt.weekday()  # Mon=0..Sun=6
         self.selected_day_abbr = DAY_ABBR[weekday]
         self.selected_month_abbr = MONTH_ABBR[dt.month - 1]
 
     def reset_session(self):
+        """إعادة الضبط داخل الجلسة."""
         self.selected_date = None
         self.selected_day_abbr = None
         self.selected_month_abbr = None
-        # Clear last defaults
         for k in self.last_defaults:
             self.last_defaults[k] = ""
 
+    # -------- التحكم بالثيم ----------
+    def _set_theme(self, name: str):
+        try:
+            # عند اختيار ثيم من قائمة TTK
+            self.style.theme_use(name)
+            self.status.set(f"Theme: {name}")
+        except tk.TclError as e:
+            messagebox.showerror("الثيم غير مدعوم", str(e))
+
+    def _apply_light(self):
+        """وضع نهاري."""
+        self._dark = False
+        if sv_ttk:
+            sv_ttk.set_theme("light")
+        else:
+            try:
+                self.style.theme_use("clam")
+            except tk.TclError:
+                pass
+        if hasattr(self, "topbar"):
+            self.topbar.configure(bg="#0ea5e9")
+        if hasattr(self, "top_title"):
+            self.top_title.configure(bg="#0ea5e9", fg="white")
+        self._set_textwidgets_colors(bg="white", fg="black")
+
+    def _apply_dark(self):
+        """وضع داكن (يفضّل عبر sv_ttk إن توفّر)."""
+        if sv_ttk:
+            try:
+                sv_ttk.set_theme("dark")
+                self._dark = True
+                if hasattr(self, "topbar"):
+                    self.topbar.configure(bg="#111827")
+                if hasattr(self, "top_title"):
+                    self.top_title.configure(bg="#111827", fg="#e5e7eb")
+                self._set_textwidgets_colors(bg="#111827", fg="#e5e7eb")
+                return
+            except Exception:
+                pass
+
+        # بديل يدوي بسيط إذا لم تتوفر sv_ttk
+        self._dark = True
+        bg, fg = "#1f2937", "#e5e7eb"
+        self.style.configure(".", background=bg, foreground=fg)
+        self.style.configure("TLabel", background=bg, foreground=fg)
+        self.style.configure("TFrame", background=bg)
+        self.style.configure("TLabelframe", background=bg, foreground=fg)
+        self.style.configure("Card.TLabelframe", background=bg)
+        self.style.configure("Card.TLabelframe.Label", background=bg, foreground=fg)
+        self.style.configure("TButton", background="#374151", foreground=fg)
+        if hasattr(self, "topbar"):
+            self.topbar.configure(bg="#111827")
+        if hasattr(self, "top_title"):
+            self.top_title.configure(bg="#111827", fg=fg)
+        self._set_textwidgets_colors(bg="#111827", fg=fg)
+
+    def _toggle_dark(self):
+        if getattr(self, "_dark", False):
+            self._apply_light()
+        else:
+            self._apply_dark()
+
+    def _set_textwidgets_colors(self, bg, fg):
+        """تلوين مربعات النص الكبيرة مع مؤشر الإدراج بما يناسب الثيم."""
+        tf = self.frames.get("TaskFormPage")
+        if tf:
+            for w in (getattr(tf, "txt_prompt", None),
+                      getattr(tf, "txt_just", None),
+                      getattr(tf, "txt_feedback", None)):
+                if w:
+                    w.configure(bg=bg, fg=fg, insertbackground=fg)
+
+# ---------------- صفحات الواجهة ----------------
 class StartPage(tk.Frame):
     def __init__(self, parent, controller: App):
         super().__init__(parent)
@@ -154,17 +264,20 @@ class DatePage(tk.Frame):
         super().__init__(parent)
         self.controller = controller
 
-        title = ttk.Label(self, text="اختر التاريخ", style="Header.TLabel") 
+        title = ttk.Label(self, text="اختر التاريخ", style="Header.TLabel")
         title.pack(pady=16)
 
         today = datetime.today()
-        self.calendar = Calendar(self, selectmode="day", year=today.year, month=today.month, day=today.day, date_pattern="yyyy-mm-dd")
+        self.calendar = Calendar(
+            self, selectmode="day",
+            year=today.year, month=today.month, day=today.day,
+            date_pattern="yyyy-mm-dd"
+        )
         self.calendar.pack(pady=10)
 
-
-        self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")   
+        self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")
         self.info_lbl.pack(pady=8)
-        
+
         controls = ttk.Frame(self)
         controls.pack(pady=16)
         next_btn = ttk.Button(controls, text="التالي", command=self.on_next)
@@ -177,7 +290,6 @@ class DatePage(tk.Frame):
         except ValueError:
             messagebox.showerror("خطأ", "يرجى اختيار تاريخ صالح من التقويم.")
             return
-
         self.controller.set_date(dt)
         self.controller.show_frame("TaskFormPage")
 
@@ -189,24 +301,50 @@ class TaskFormPage(tk.Frame):
         header = ttk.Label(self, text="إدخال تفاصيل المهمة", style="Header.TLabel")
         header.grid(row=0, column=0, columnspan=4, pady=(8, 12), sticky="e")
 
+        # ستايلات للتمييز البصري عند الخطأ
+        _invalid_style = ttk.Style()
+        _invalid_style.configure("Invalid.TEntry",    fieldbackground="#fee2e2")
+        _invalid_style.configure("Invalid.TCombobox", fieldbackground="#fee2e2")
 
-        # Cards
-        left_card  = ttk.Labelframe(self, text="تفاصيل المهمة", style="Card.TLabelframe")
+        # البطاقات
+        left_card  = ttk.Labelframe(self, text="تفاصيل المهمة",   style="Card.TLabelframe")
         right_card = ttk.Labelframe(self, text="التقييم والتوقيت", style="Card.TLabelframe")
-        meta_card  = ttk.Labelframe(self, text="بيانات المشروع", style="Card.TLabelframe")
+        meta_card  = ttk.Labelframe(self, text="بيانات المشروع",   style="Card.TLabelframe")
 
         left_card.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=8, pady=6)
         right_card.grid(row=1, column=2, columnspan=2, sticky="nsew", padx=8, pady=6)
         meta_card.grid(row=2, column=0, columnspan=4, sticky="nsew", padx=8, pady=6)
 
-        for c in (0,1,2,3):
+        for c in (0, 1, 2, 3):
             self.grid_columnconfigure(c, weight=1)
 
-        # --- left_card ---
+        # -------- left_card --------
         ttk.Label(left_card, text="Task ID:").grid(row=0, column=0, sticky="e", padx=6, pady=6)
         self.var_task_id = tk.StringVar()
         self.entry_task_id = ttk.Entry(left_card, textvariable=self.var_task_id, width=36, justify="right")
         self.entry_task_id.grid(row=0, column=1, sticky="we", padx=6, pady=6)
+
+        # تحقق لحظي: حتى 24 خانة [0-9a-fA-F]، والفراغ مسموح (أثناء الكتابة)
+        _vcmd_hex = (self.register(lambda P: (P == "" or re.fullmatch(r"[0-9a-fA-F]{0,24}", P) is not None)), "%P")
+        self.entry_task_id.configure(validate="key", validatecommand=_vcmd_hex)
+
+        # لصق مُنظَّف (يحذف غير-hex، يقتطع إلى 24، يحوّل إلى حروف صغيرة)
+        def _on_paste_tid(event=None):
+            try:
+                s = self.clipboard_get()
+            except tk.TclError:
+                return "break"
+            clean = re.sub(r"[^0-9a-fA-F]", "", s)[:24].lower()
+            self.var_task_id.set(clean)
+            self.entry_task_id.icursor("end")
+            self._update_add_state()
+            return "break"
+
+        self.entry_task_id.bind("<<Paste>>", _on_paste_tid)
+        self.entry_task_id.bind("<Control-v>", _on_paste_tid)
+        self.entry_task_id.bind("<Control-V>", _on_paste_tid)
+        if self.tk.call("tk", "windowingsystem") == "aqua":
+            self.entry_task_id.bind("<Command-v>", _on_paste_tid)
 
         ttk.Label(left_card, text="The prompt:").grid(row=1, column=0, sticky="ne", padx=6, pady=6)
         self.txt_prompt = scrolledtext.ScrolledText(left_card, width=44, height=5)
@@ -216,93 +354,205 @@ class TaskFormPage(tk.Frame):
         self.txt_just = scrolledtext.ScrolledText(left_card, width=44, height=5)
         self.txt_just.grid(row=2, column=1, sticky="we", padx=6, pady=6)
 
-        for c in (0,1):
+        for c in (0, 1):
             left_card.grid_columnconfigure(c, weight=1)
 
-        # --- right_card ---
+        # -------- right_card --------
         ttk.Label(right_card, text="Feedback:").grid(row=0, column=0, sticky="ne", padx=6, pady=6)
         self.txt_feedback = scrolledtext.ScrolledText(right_card, width=44, height=5)
         self.txt_feedback.grid(row=0, column=1, sticky="we", padx=6, pady=6)
 
         ttk.Label(right_card, text="rating:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
         self.var_rating = tk.StringVar()
-        self.entry_rating = ttk.Entry(right_card, textvariable=self.var_rating, width=36, justify="right")
-        self.entry_rating.grid(row=1, column=1, sticky="we", padx=6, pady=6)
+        self.cmb_rating = ttk.Combobox(
+            right_card, textvariable=self.var_rating,
+            values=["1", "2", "3", "4", "5"], state="normal", justify="right"
+        )
+        self.cmb_rating.grid(row=1, column=1, sticky="we", padx=6, pady=6)
+        # تحقق لحظي للأرقام الصحيحة أو فراغ
+        _vcmd_int = (self.register(lambda P: (P.isdigit() or P == "")), "%P")
+        self.cmb_rating.configure(validate="key", validatecommand=_vcmd_int)
+        self.cmb_rating.bind("<<ComboboxSelected>>", lambda e: self._update_add_state())
 
         ttk.Label(right_card, text="submitted time:").grid(row=2, column=0, sticky="e", padx=6, pady=6)
         self.var_submitted = tk.StringVar()
         self.entry_submitted = ttk.Entry(right_card, textvariable=self.var_submitted, width=36, justify="right")
         self.entry_submitted.grid(row=2, column=1, sticky="we", padx=6, pady=6)
 
-        for c in (0,1):
+        for c in (0, 1):
             right_card.grid_columnconfigure(c, weight=1)
 
-        # --- meta_card ---
+        # -------- meta_card --------
         ttk.Label(meta_card, text="Project:").grid(row=0, column=0, sticky="e", padx=6, pady=6)
         self.var_project = tk.StringVar()
-        self.entry_project = ttk.Entry(meta_card, textvariable=self.var_project, width=36, justify="right")
-        self.entry_project.grid(row=0, column=1, sticky="we", padx=6, pady=6)
+        self.cmb_project = ttk.Combobox(
+            meta_card, textvariable=self.var_project,
+            values=["hopper_code_rlhf", "apron_evals", "hopper_v2"],
+            state="normal", justify="right"
+        )
+        self.cmb_project.grid(row=0, column=1, sticky="we", padx=6, pady=6)
 
         ttk.Label(meta_card, text="Task duration (hour):").grid(row=0, column=2, sticky="e", padx=6, pady=6)
         self.var_duration = tk.StringVar()
         self.entry_duration = ttk.Entry(meta_card, textvariable=self.var_duration, width=36, justify="right")
         self.entry_duration.grid(row=0, column=3, sticky="we", padx=6, pady=6)
+        # تحقق لحظي لعدد عشري/صحيح أو فراغ
+        _vcmd_float = (self.register(lambda P: (P == "" or re.fullmatch(r"\d*\.?\d*", P) is not None)), "%P")
+        self.entry_duration.configure(validate="key", validatecommand=_vcmd_float)
 
         ttk.Label(meta_card, text="Level:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
         self.var_level = tk.StringVar()
-        self.entry_level = ttk.Entry(meta_card, textvariable=self.var_level, width=36, justify="right")
-        self.entry_level.grid(row=1, column=1, sticky="we", padx=6, pady=6)
+        self.cmb_level = ttk.Combobox(
+            meta_card, textvariable=self.var_level,
+            values=["reviewer", "tasker"], state="normal", justify="right"
+        )
+        self.cmb_level.grid(row=1, column=1, sticky="we", padx=6, pady=6)
 
         ttk.Label(meta_card, text="Verdict:").grid(row=1, column=2, sticky="e", padx=6, pady=6)
         self.var_verdict = tk.StringVar()
-        self.entry_verdict = ttk.Entry(meta_card, textvariable=self.var_verdict, width=36, justify="right")
-        self.entry_verdict.grid(row=1, column=3, sticky="we", padx=6, pady=6)
+        self.cmb_verdict = ttk.Combobox(
+            meta_card, textvariable=self.var_verdict, state="normal", justify="right",
+            values=[
+                "[Approve / Approve With Fixes] The task is now high quality: it has a good prompt, correct ratings, and a great final response.",
+                "[Fixable] The task is mostly correct but requires adjustments to be done by a reviewer in the next review level",
+                "[Reject] Cannot be fixed in the provided time. The task should be SBQed.",
+                "[Approve] After my review/fix, the task is now high quality: it has a good prompt, good justifications, correct ratings, and a great final/selected response.",
+                "[Reject] After reviewing this task I have determined that it cannot be fixed in the allotted time. I have written detailed feedback to the original attempter describing exactly what needs to be fixed.",
+                "NONE",
+            ]
+        )
+        self.cmb_verdict.grid(row=1, column=3, sticky="we", padx=6, pady=6)
 
-        for c in (0,1,2,3):
+        for c in (0, 1, 2, 3):
             meta_card.grid_columnconfigure(c, weight=1)
 
-        # Buttons
+        # السماح بإضافة قيمة جديدة إلى قائمة أي Combobox عند كتابتها يدويًا
+        def _ensure_in_values(combo: ttk.Combobox):
+            val = combo.get().strip()
+            if not val:
+                return
+            vals = list(combo.cget("values"))
+            if val not in vals:
+                vals.append(val)
+                combo.configure(values=vals)
+
+        for cmb in (self.cmb_rating, self.cmb_level, self.cmb_verdict, self.cmb_project):
+            cmb.bind("<<ComboboxSelected>>", lambda e, c=cmb: _ensure_in_values(c))
+            cmb.bind("<FocusOut>",           lambda e, c=cmb: _ensure_in_values(c))
+
+        # أزرار التحكم
         buttons = ttk.Frame(self)
         buttons.grid(row=3, column=0, columnspan=4, pady=12)
-
-        self.btn_add  = ttk.Button(buttons, text="إضافة المهمة", command=self.on_add_task, state="disabled")
+        self.btn_add = ttk.Button(buttons, text="إضافة المهمة", command=self.on_add_task, state="disabled")
         self.btn_add.grid(row=0, column=1, padx=8)
 
-        # Validation: enable Add button only if Task ID present
+        # تتبّع تغيّر القيم لتفعيل/تعطيل زر الإضافة وفق القواعد
         self.var_task_id.trace_add("write", self._update_add_state)
+        self.var_rating.trace_add("write", self._update_add_state)
+        self.var_duration.trace_add("write", self._update_add_state)
 
-        # When entering this page, prefill project-related fields from last_defaults
+        # عند عرض الصفحة: تعبئة افتراضية وتحديث حالة الزر
         self.bind("<<ShowPage>>", self.on_show)
 
+    # مساعد لإطلاق حدث العرض عند العودة للصفحة
     def event_generate_show(self):
-        # helper to trigger prefill when the frame is raised
         self.event_generate("<<ShowPage>>")
 
     def on_show(self, event=None):
+        """تعبئة القيم الافتراضية، وتحديث وقت الإرسال إن كان فارغًا، وتحديث حالة الزر."""
         d = self.controller.last_defaults
-        # Prefill
-        self.var_project.set(d.get("Project",""))
-        self.var_duration.set(d.get("Task duration (hour)",""))
-        self.var_level.set(d.get("Level",""))
-        self.var_verdict.set(d.get("Verdict",""))
+        self.var_project.set(d.get("Project", ""))
+        self.var_duration.set(d.get("Task duration (hour)", ""))
+        self.var_level.set(d.get("Level", ""))
+        self.var_verdict.set(d.get("Verdict", ""))
+
+        if not self.var_submitted.get():
+            self.var_submitted.set(datetime.now().strftime("%H:%M"))
+
+        self._update_add_state()
+
+    # تمييز الحقول بصريًا عند الخطأ (يدعم Entry وCombobox)
+    def _mark_valid(self, widget, ok: bool):
+        if not widget:
+            return
+        style_name = "Invalid.TCombobox" if isinstance(widget, ttk.Combobox) else "Invalid.TEntry"
+        try:
+            widget.configure(style="" if ok else style_name)
+        except Exception:
+            pass
+
+    # تحقق بسيط للعدد العشري
+    def _is_float(self, s: str) -> bool:
+        try:
+            float(s.strip())
+            return True
+        except Exception:
+            return False
+
+    def _validate_all(self, show_msg: bool = False) -> bool:
+        """القواعد:
+        - Task ID إلزامي ويجب أن يطابق ^[0-9a-f]{24}$ (نحوّل لما دوني قبل التحقق).
+        - rating اختياري: إن أُدخل يجب أن يكون رقمًا صحيحًا.
+        - Task duration اختياري: إن أُدخل يجب أن يكون رقمًا (يسمح بالعشري).
+        """
+        # تطبيع الـ Task ID إلى حروف صغيرة قبل التحقق
+        tid_raw = self.var_task_id.get().strip()
+        tid = tid_raw.lower()
+        if tid != tid_raw:
+            self.var_task_id.set(tid)
+
+        rating   = self.var_rating.get().strip()
+        duration = self.var_duration.get().strip()
+
+        ok_tid      = bool(HEX24_RE.fullmatch(tid))
+        ok_rating   = (rating == "") or rating.isdigit()
+        ok_duration = (duration == "") or self._is_float(duration)
+
+        # اختيار الودجت الصحيح للتلوين (Entry/Combobox)
+        rating_widget   = getattr(self, "entry_rating", None) or getattr(self, "cmb_rating", None)
+        duration_widget = getattr(self, "entry_duration", None) or getattr(self, "cmb_duration", None)
+
+        # تلوين الحقول حسب الصحة
+        self._mark_valid(self.entry_task_id, ok_tid)
+        self._mark_valid(rating_widget, ok_rating)
+        self._mark_valid(duration_widget, ok_duration)
+
+        # رسائل خطأ عند الطلب
+        if not ok_tid and show_msg:
+            messagebox.showerror("تحقق المدخلات", "Task ID يجب أن يطابق النمط: ^[0-9a-f]{24}$ (حروف صغيرة فقط).")
+            return False
+        if ok_tid and (not ok_rating or not ok_duration) and show_msg:
+            msgs = []
+            if not ok_rating:
+                msgs.append("rating (اختياري): إن أُدخل يجب أن يكون رقمًا صحيحًا فقط.")
+            if not ok_duration:
+                msgs.append("Task duration (اختياري): إن أُدخل يجب أن يكون رقمًا (يسمح بالعشري).")
+            messagebox.showerror("تحقق المدخلات", "\n".join(msgs))
+            return False
+
+        return ok_tid and ok_rating and ok_duration
 
     def _update_add_state(self, *args):
-        if self.var_task_id.get().strip():
-            self.btn_add.config(state="normal")
-        else:
-            self.btn_add.config(state="disabled")
+        """تفعيل زر الإضافة فقط عندما تتحقق القواعد أعلاه."""
+        can_enable = self._validate_all(show_msg=False)
+        self.btn_add.config(state="normal" if can_enable else "disabled")
 
     def on_add_task(self):
+        """التحقق النهائي وبناء الصف وإرساله إلى Google Sheets."""
         if not self.controller.selected_date:
             messagebox.showerror("خطأ", "يرجى اختيار التاريخ أولاً.")
             return
 
-        # Build the row in the exact order of HEADERS
-        # Get big text fields
+        # بوابة نهائية: في حال وجود أخطاء يمنع الإرسال ويعرض الرسائل
+        if not self._validate_all(show_msg=True):
+            return
+
+        # الحقول النصية الكبيرة
         prompt = self.txt_prompt.get("1.0", "end").strip()
         just   = self.txt_just.get("1.0", "end").strip()
         feed   = self.txt_feedback.get("1.0", "end").strip()
 
+        # بناء الصف بنفس ترتيب HEADERS
         row = [
             self.var_task_id.get().strip(),
             prompt,
@@ -316,27 +566,27 @@ class TaskFormPage(tk.Frame):
             self.var_verdict.get().strip(),
             self.controller.selected_date.strftime("%Y-%m-%d"),
             self.controller.selected_day_abbr,
-            self.controller.selected_month_abbr
+            self.controller.selected_month_abbr,
         ]
 
+        # إرسال إلى Google Sheets
         try:
             ws = append_task_row(row)
         except Exception as e:
             messagebox.showerror("فشل الإضافة", f"حدث خطأ أثناء الإضافة إلى Google Sheets:\n{e}")
             return
 
-        # Save defaults for project-related fields
+        # حفظ القيم الافتراضية لجلسات الإدخال التالية
         self.controller.last_defaults["Project"] = self.var_project.get().strip()
         self.controller.last_defaults["Task duration (hour)"] = self.var_duration.get().strip()
         self.controller.last_defaults["Level"] = self.var_level.get().strip()
         self.controller.last_defaults["Verdict"] = self.var_verdict.get().strip()
 
-        # Status
+        # تحديث الحالة والانتقال
         self.controller.status.set(f"✓ Added to: {ws.spreadsheet.url} / {ws.title}")
-
-        # Go to post-add page
         self.controller.show_frame("PostAddPage")
-        # Clear only non-default fields for next time user returns here
+
+        # تفريغ بعض الحقول لسهولة إدخال مهمة جديدة
         self.var_task_id.set("")
         self.txt_prompt.delete("1.0", "end")
         self.txt_just.delete("1.0", "end")
@@ -361,13 +611,12 @@ class PostAddPage(tk.Frame):
         btn_finish.grid(row=0, column=1, padx=8, pady=4)
 
     def add_new_task(self):
-        # Keep same date and prefilled defaults
+        # العودة لنفس التاريخ مع بقاء القيم الافتراضية
         self.controller.show_frame("TaskFormPage")
-        # Trigger prefill on TaskFormPage
         self.controller.frames["TaskFormPage"].event_generate_show()
 
     def finish_work(self):
-        # إنهاء تشغيل الكود (إغلاق نافذة Tkinter)
+        # إغلاق نافذة التطبيق
         self.controller.destroy()
 
 if __name__ == "__main__":
