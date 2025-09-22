@@ -34,7 +34,7 @@ SERVICE_ACCOUNT_FILE = r"C:\Users\Naser Rahal\ServiceAccountKey\service_account.
 # WORKSHEET_TITLE = "Submitted_Tasks_Log"
 
 SHEET_ID = "19Juc5u43K4Xx3vU9yeyZVx5K-aRdOOm_c5etpfpcsWQ"
-WORKSHEET_TITLE = "Sheet1"   # غيّرها لاسم التبويب عندك
+WORKSHEET_TITLE = "Sheet1"
 
 # ترتيب الأعمدة في الشيت (يجب أن يطابق ترتيب الصف المُرسل)
 HEADERS = [
@@ -108,6 +108,8 @@ class App(tk.Tk):
         self.style.configure("Header.TLabel", font=TITLE_FONT)
         self.style.configure("Card.TLabelframe", padding=12)
         self.style.configure("Card.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
+        # حجم أكبر لقائمة OT
+        self.style.configure("Big.TCombobox", font=("Segoe UI", 14))
 
         # حالة مشتركة للجلسة
         self.selected_date = None
@@ -301,24 +303,30 @@ class DatePage(tk.Frame):
         self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")
         self.info_lbl.pack(pady=8)
 
-        # --- OT? dropdown ---
-        ot_row = ttk.Frame(self)
-        ot_row.pack(pady=6, fill="x")
-        ttk.Label(ot_row, text="OT?").pack(side="right", padx=8)
-        self.cmb_ot = ttk.Combobox(
-            ot_row,
-            textvariable=self.controller.var_ot,
-            values=["Yes", "No"],
-            state="readonly",
-            width=8,
-            justify="right"
-        )
-        self.cmb_ot.pack(side="right")
-
         controls = ttk.Frame(self)
         controls.pack(pady=16)
         next_btn = ttk.Button(controls, text="التالي", command=self.on_next)
         next_btn.grid(row=0, column=1, padx=8)
+
+        # --- OT? block centered under the Next button ---
+        ot_box = ttk.Frame(self)
+        ot_box.pack(pady=(12, 24))  # فراغ عمودي مناسب
+
+        # العنوان فوق القائمة بخط كبير وواضح
+        ot_label = ttk.Label(ot_box, text="OT?", style="Header.TLabel", anchor="center", justify="center")
+        ot_label.pack(pady=(0, 6), fill="x")
+
+        # القائمة المنسدلة في المنتصف، بحجم خط أكبر
+        self.cmb_ot = ttk.Combobox(
+            ot_box,
+            textvariable=self.controller.var_ot,
+            values=["Yes", "No"],
+            state="readonly",
+            width=10,
+            justify="center",
+            style="Big.TCombobox"
+        )
+        self.cmb_ot.pack()
 
     def on_next(self):
         sel = self.calendar.get_date()
