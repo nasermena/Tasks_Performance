@@ -11,6 +11,8 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from tkcalendar import Calendar
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
+
 import re
 import time
 import threading, queue
@@ -27,14 +29,17 @@ except Exception:
 # ===================== الإعدادات =====================
 # ملاحظة: حدّث المسار والـ Sheet/Worksheet حسب بيئتك
 SERVICE_ACCOUNT_FILE = r"C:\Users\Naser Rahal\ServiceAccountKey\service_account.json"
-SHEET_ID = "1BJRzv4MXyrr3-cnD53eHcIMmB8XOSjSMwHNxthpdIrY"
-WORKSHEET_TITLE = "Submitted_Tasks_Log"   # غيّرها لاسم التبويب عندك
+
+# SHEET_ID = "1BJRzv4MXyrr3-cnD53eHcIMmB8XOSjSMwHNxthpdIrY"
+# WORKSHEET_TITLE = "Submitted_Tasks_Log"
+
+SHEET_ID = "19Juc5u43K4Xx3vU9yeyZVx5K-aRdOOm_c5etpfpcsWQ"
+WORKSHEET_TITLE = "Sheet1"   # غيّرها لاسم التبويب عندك
 
 # ترتيب الأعمدة في الشيت (يجب أن يطابق ترتيب الصف المُرسل)
 HEADERS = [
-    "Task ID", "The prompt", "Justification", "Feedback", "rating", "submitted time",
-    "Project", "Task duration (hour)", "Level", "Verdict",
-    "Date", "Day", "Month"
+    "Task ID", "The prompt", "Justification", "Feedback", "Rating", "Project", "Task duration (hour)", "Level", "Verdict",
+    "Date", "Day", "Month", "Submitted time", "Date (US)", "Day (US)", "Month (US)", "Submitted time (US)", "OT",
 ]
 
 # اختصارات الأشهر/الأيام (بالإنجليزية لتفادي مشاكل locale)
@@ -108,6 +113,7 @@ class App(tk.Tk):
         self.selected_date = None
         self.selected_day_abbr = None
         self.selected_month_abbr = None
+        self.var_ot = tk.StringVar(value="No")  # القيمة الافتراضية، سيتم ضبطها تلقائيًا حسب لوس أنجلوس
 
         # قيم افتراضية تُحفظ مؤقتًا داخل الجلسة
         self.last_defaults = {
@@ -135,7 +141,6 @@ class App(tk.Tk):
         container.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
 
-        container.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
@@ -290,8 +295,25 @@ class DatePage(tk.Frame):
         )
         self.calendar.pack(pady=10)
 
+        self._update_ot_default()
+        self.calendar.bind("<<CalendarSelected>>", lambda e: self._update_ot_default())
+
         self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")
         self.info_lbl.pack(pady=8)
+
+        # --- OT? dropdown ---
+        ot_row = ttk.Frame(self)
+        ot_row.pack(pady=6, fill="x")
+        ttk.Label(ot_row, text="OT?").pack(side="right", padx=8)
+        self.cmb_ot = ttk.Combobox(
+            ot_row,
+            textvariable=self.controller.var_ot,
+            values=["Yes", "No"],
+            state="readonly",
+            width=8,
+            justify="right"
+        )
+        self.cmb_ot.pack(side="right")
 
         controls = ttk.Frame(self)
         controls.pack(pady=16)
@@ -305,11 +327,26 @@ class DatePage(tk.Frame):
         except ValueError:
             messagebox.showerror("خطأ", "يرجى اختيار تاريخ صالح من التقويم.")
             return
+        self._update_ot_default()  # تأكيد تعيين OT الافتراضي وفق التاريخ المختار
         self.controller.set_date(dt)
         self.controller.show_frame("TaskFormPage")
         
         # مهم: فعّل حدث العرض كي يبدأ المؤقت
         self.controller.frames["TaskFormPage"].event_generate_show()
+
+    def _update_ot_default(self):
+        """يضبط القيمة الافتراضية لـ OT حسب يوم الأسبوع في لوس أنجلوس للتاريخ المختار."""
+        try:
+            sel = self.calendar.get_date()
+            dt = datetime.strptime(sel, "%Y-%m-%d").date()
+        except Exception:
+            return
+        la = ZoneInfo("America/Los_Angeles")
+        # اختَر منتصف النهار لتفادي مشاكل DST
+        la_dt = datetime(dt.year, dt.month, dt.day, 12, 0, tzinfo=la)
+        wd = la_dt.weekday()  # Mon=0 .. Sun=6
+        # Yes في الجمعة/السبت (wd 4 أو 5)، No في الأحد..الخميس
+        self.controller.var_ot.set("Yes" if wd in (4, 5) else "No")
 
 class TaskFormPage(tk.Frame):
     def __init__(self, parent, controller: App):
@@ -400,7 +437,7 @@ class TaskFormPage(tk.Frame):
         self.txt_feedback = scrolledtext.ScrolledText(right_card, width=44, height=5)
         self.txt_feedback.grid(row=0, column=1, sticky="nsew", padx=6, pady=6)
 
-        ttk.Label(right_card, text="rating:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
+        ttk.Label(right_card, text="Rating:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
         self.var_rating = tk.StringVar()
         self.cmb_rating = ttk.Combobox(
             right_card, textvariable=self.var_rating,
@@ -662,6 +699,16 @@ class TaskFormPage(tk.Frame):
         
         submitted_now = datetime.now().strftime("%H:%M")  # وقت الآن ساعات:دقائق
 
+        la = ZoneInfo("America/Los_Angeles")
+        us_now = datetime.now(la)
+        submitted_us = us_now.strftime("%H:%M")
+        # التاريخ/اليوم/الشهر (US) محسوبة على أساس التاريخ المختار ولكن بمنطقة لوس أنجلوس
+        dt = self.controller.selected_date
+        la_dt = datetime(dt.year, dt.month, dt.day, 12, 0, tzinfo=la)
+        us_date = la_dt.strftime("%Y-%m-%d")
+        us_day_abbr = DAY_ABBR[la_dt.weekday()]
+        us_month_abbr = MONTH_ABBR[la_dt.month - 1]
+
         # بناء الصف بنفس ترتيب HEADERS
         row = [
             self.var_task_id.get().strip(),
@@ -669,7 +716,6 @@ class TaskFormPage(tk.Frame):
             just,
             feed,
             self.var_rating.get().strip(),
-            submitted_now,
             self.var_project.get().strip(),
             duration_hours,
             self.var_level.get().strip(),
@@ -677,6 +723,12 @@ class TaskFormPage(tk.Frame):
             self.controller.selected_date.strftime("%Y-%m-%d"),
             self.controller.selected_day_abbr,
             self.controller.selected_month_abbr,
+            submitted_now,
+            us_date,            # Date (US)
+            us_day_abbr,        # Day (US)
+            us_month_abbr,      # Month (US)
+            submitted_us,        # Submitted time (US)
+            self.controller.var_ot.get().strip(),   # OT
         ]
         
         # إظهار المؤشر وتعطيل الصفحة ثم الإرسال في خيط
