@@ -298,7 +298,6 @@ class DatePage(tk.Frame):
         self.calendar.pack(pady=10)
 
         self._update_ot_default()
-        self.calendar.bind("<<CalendarSelected>>", lambda e: self._update_ot_default())
 
         self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")
         self.info_lbl.pack(pady=8)
@@ -343,17 +342,11 @@ class DatePage(tk.Frame):
         self.controller.frames["TaskFormPage"].event_generate_show()
 
     def _update_ot_default(self):
-        """يضبط القيمة الافتراضية لـ OT حسب يوم الأسبوع في لوس أنجلوس للتاريخ المختار."""
-        try:
-            sel = self.calendar.get_date()
-            dt = datetime.strptime(sel, "%Y-%m-%d").date()
-        except Exception:
-            return
+        """Set OT default based on CURRENT LA weekday, not the selected calendar date."""
         la = ZoneInfo("America/Los_Angeles")
-        # اختَر منتصف النهار لتفادي مشاكل DST
-        la_dt = datetime(dt.year, dt.month, dt.day, 12, 0, tzinfo=la)
-        wd = la_dt.weekday()  # Mon=0 .. Sun=6
-        # Yes في الجمعة/السبت (wd 4 أو 5)، No في الأحد..الخميس
+        us_now = datetime.now(la)
+        wd = us_now.weekday()  # Mon=0 .. Sun=6
+        # Yes on Fri/Sat (4,5); No on Sun–Thu
         self.controller.var_ot.set("Yes" if wd in (4, 5) else "No")
 
 class TaskFormPage(tk.Frame):
@@ -710,12 +703,10 @@ class TaskFormPage(tk.Frame):
         la = ZoneInfo("America/Los_Angeles")
         us_now = datetime.now(la)
         submitted_us = us_now.strftime("%H:%M")
-        # التاريخ/اليوم/الشهر (US) محسوبة على أساس التاريخ المختار ولكن بمنطقة لوس أنجلوس
-        dt = self.controller.selected_date
-        la_dt = datetime(dt.year, dt.month, dt.day, 12, 0, tzinfo=la)
-        us_date = la_dt.strftime("%Y-%m-%d")
-        us_day_abbr = DAY_ABBR[la_dt.weekday()]
-        us_month_abbr = MONTH_ABBR[la_dt.month - 1]
+
+        us_date = us_now.strftime("%Y-%m-%d")
+        us_day_abbr = DAY_ABBR[us_now.weekday()]
+        us_month_abbr = MONTH_ABBR[us_now.month - 1]
 
         # بناء الصف بنفس ترتيب HEADERS
         row = [
