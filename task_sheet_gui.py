@@ -110,6 +110,7 @@ class App(tk.Tk):
         self.style.configure("Card.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
         # حجم أكبر لقائمة OT
         self.style.configure("Big.TCombobox", font=("Segoe UI", 14))
+        self.style.configure("StatsLine.TLabel", font=("Segoe UI", 14, "bold"))
 
         # حالة مشتركة للجلسة
         self.selected_date = None
@@ -124,6 +125,8 @@ class App(tk.Tk):
             "Level": "",
             "Verdict": "",
         }
+
+        self.session_submitted = 0  # عدد المهام المضافة منذ تشغيل التطبيق
 
         # شريط علوي
         self.topbar = tk.Frame(self, bg="#0ea5e9", height=52)
@@ -415,9 +418,9 @@ class TaskFormPage(tk.Frame):
 
 
         # -------- left_card --------
-        ttk.Label(left_card, text="Task ID:").grid(row=0, column=0, sticky="e", padx=6, pady=6)
+        ttk.Label(left_card, text="Task ID:", anchor="w", justify="left").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         self.var_task_id = tk.StringVar()
-        self.entry_task_id = ttk.Entry(left_card, textvariable=self.var_task_id, width=36, justify="right")
+        self.entry_task_id = ttk.Entry(left_card, textvariable=self.var_task_id, width=36, justify="left")
         self.entry_task_id.grid(row=0, column=1, sticky="we", padx=6, pady=6)
 
         # تحقق لحظي: حتى 24 خانة [0-9a-fA-F]، والفراغ مسموح (أثناء الكتابة)
@@ -442,11 +445,27 @@ class TaskFormPage(tk.Frame):
         if self.tk.call("tk", "windowingsystem") == "aqua":
             self.entry_task_id.bind("<Command-v>", _on_paste_tid)
 
-        ttk.Label(left_card, text="The prompt:").grid(row=1, column=0, sticky="ne", padx=6, pady=6)
+        ttk.Label(left_card, text="The prompt:", anchor="nw", justify="left").grid(row=1, column=0, sticky="nw", padx=6, pady=6)
         self.txt_prompt = scrolledtext.ScrolledText(left_card, width=44, height=5)
         self.txt_prompt.grid(row=1, column=1, sticky="nsew", padx=6, pady=6)
+        
+        # اجعل المؤشر والكتابة من اليمين في خانة The prompt
+        self.txt_prompt.configure(wrap="word")
+        self.txt_prompt.tag_configure("align_right", justify="right")
 
-        ttk.Label(left_card, text="Justification:").grid(row=2, column=0, sticky="ne", padx=6, pady=6)
+        def _prompt_align_right(event=None):
+            # طبّق محاذاة يمين على كل المحتوى
+            self.txt_prompt.tag_add("align_right", "1.0", "end")
+            # انقل المؤشر لنهاية السطر (يظهر يمينًا مع المحاذاة)
+            self.txt_prompt.mark_set("insert", "end-1c")
+
+        self.txt_prompt.bind("<FocusIn>", _prompt_align_right)
+        self.txt_prompt.bind("<KeyRelease>", _prompt_align_right)
+
+        # تطبيق أولي عند إنشاء الصفحة
+        _prompt_align_right()
+
+        ttk.Label(left_card, text="Justification:", anchor="nw", justify="left").grid(row=2, column=0, sticky="nw", padx=6, pady=6)
         self.txt_just = scrolledtext.ScrolledText(left_card, width=44, height=5)
         self.txt_just.grid(row=2, column=1, sticky="nsew", padx=6, pady=6)
 
@@ -454,15 +473,15 @@ class TaskFormPage(tk.Frame):
             left_card.grid_columnconfigure(c, weight=1)
 
         # -------- right_card --------
-        ttk.Label(right_card, text="Feedback:").grid(row=0, column=0, sticky="ne", padx=6, pady=6)
+        ttk.Label(right_card, text="Feedback:", anchor="nw", justify="left").grid(row=0, column=0, sticky="nw", padx=6, pady=6)
         self.txt_feedback = scrolledtext.ScrolledText(right_card, width=44, height=5)
         self.txt_feedback.grid(row=0, column=1, sticky="nsew", padx=6, pady=6)
 
-        ttk.Label(right_card, text="Rating:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
+        ttk.Label(right_card, text="Rating:", anchor="w", justify="left").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         self.var_rating = tk.StringVar()
         self.cmb_rating = ttk.Combobox(
             right_card, textvariable=self.var_rating,
-            values=["1", "2", "3", "4", "5"], state="normal", justify="right"
+            values=["1", "2", "3", "4", "5"], state="normal", justify="left"
         )
         self.cmb_rating.grid(row=1, column=1, sticky="we", padx=6, pady=6)
         # تحقق لحظي للأرقام الصحيحة أو فراغ
@@ -480,7 +499,7 @@ class TaskFormPage(tk.Frame):
         self.cmb_project = ttk.Combobox(
             meta_card, textvariable=self.var_project,
             values=["hopper_code_rlhf", "apron_evals", "hopper_v2"],
-            state="normal", justify="right"
+            state="normal", justify="left"
         )
         self.cmb_project.grid(row=0, column=1, sticky="we", padx=6, pady=6)
 
@@ -488,14 +507,14 @@ class TaskFormPage(tk.Frame):
         self.var_level = tk.StringVar()
         self.cmb_level = ttk.Combobox(
             meta_card, textvariable=self.var_level,
-            values=["reviewer", "tasker"], state="normal", justify="right"
+            values=["reviewer", "tasker"], state="normal", justify="left"
         )
         self.cmb_level.grid(row=0, column=3, sticky="we", padx=6, pady=6)
 
         ttk.Label(meta_card, text="Verdict:").grid(row=0, column=4, sticky="e", padx=6, pady=6)
         self.var_verdict = tk.StringVar()
         self.cmb_verdict = ttk.Combobox(
-            meta_card, textvariable=self.var_verdict, state="normal", justify="right",
+            meta_card, textvariable=self.var_verdict, state="normal", justify="left",
             values=[
                 "[Approve / Approve With Fixes] The task is now high quality: it has a good prompt, correct ratings, and a great final response.",
                 "[Fixable] The task is mostly correct but requires adjustments to be done by a reviewer in the next review level",
@@ -539,7 +558,21 @@ class TaskFormPage(tk.Frame):
         buttons.grid(row=4, column=0, columnspan=4, pady=12)
         self.btn_add = ttk.Button(buttons, text="إضافة المهمة", command=self.on_add_task, state="disabled")
         self.btn_add.grid(row=0, column=1, padx=8)
-        
+
+        # سطر عدّاد مصغّر: الجملة + الرقم بجانبها
+        self.var_stats_line = tk.StringVar(value="عدد المهام المسلّمة حتى الآن: 0")
+
+        stats_box = ttk.Frame(self)
+        stats_box.grid(row=3, column=3, rowspan=2, sticky="ne", padx=(0, 8), pady=(0, 10))
+
+        ttk.Label(
+            stats_box,
+            textvariable=self.var_stats_line,
+            style="StatsLine.TLabel",
+            anchor="e",
+            justify="right"
+        ).pack()
+
         # زر إعادة تعيين المؤقت تحت زر إضافة المهمة مباشرة
         self.btn_reset_timer = ttk.Button(
             buttons, text="إعادة تعيين المؤقت", command=self.on_reset_timer)
@@ -563,6 +596,9 @@ class TaskFormPage(tk.Frame):
     def event_generate_show(self):
         self.event_generate("<<ShowPage>>")
 
+    def _refresh_tasks_count(self):
+        self.var_stats_line.set(f"عدد المهام المسلّمة حتى الآن: {self.controller.session_submitted}")
+
     def on_show(self, event=None):
         """تعبئة القيم الافتراضية، وتحديث وقت الإرسال إن كان فارغًا، وتحديث حالة الزر."""
         d = self.controller.last_defaults
@@ -574,6 +610,8 @@ class TaskFormPage(tk.Frame):
 
         self._update_add_state()
         
+        self._refresh_tasks_count()
+
         dt = self.controller.selected_date or date.today()
         self.header_date.configure(text=f' {DAY_ABBR[dt.weekday()]} - {dt.strftime("%Y-%m-%d")}')
 
@@ -690,6 +728,8 @@ class TaskFormPage(tk.Frame):
             self.controller.last_defaults["Project"] = self.var_project.get().strip()
             self.controller.last_defaults["Level"] = self.var_level.get().strip()
             self.controller.last_defaults["Verdict"] = self.var_verdict.get().strip()
+            self.controller.session_submitted += 1
+            self._refresh_tasks_count()
 
             # تحديث الحالة (إن موجود)
             if hasattr(self.controller, "status"):
