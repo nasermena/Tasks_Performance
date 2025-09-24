@@ -132,7 +132,7 @@ class App(tk.Tk):
             self.topbar, text="تسجيل مهام اليوم على Google Sheets",
             bg="#0ea5e9", fg="white", font=("Segoe UI", 16, "bold")
         )
-        self.top_title.pack(side="right", padx=16)
+        self.top_title.pack(side="top", padx=16)
 
         # الحاوية العامة للصفحات
         container = tk.Frame(self)
@@ -354,8 +354,28 @@ class TaskFormPage(tk.Frame):
         super().__init__(parent)
         self.controller = controller
 
-        header = ttk.Label(self, text="إدخال تفاصيل المهمة", style="Header.TLabel")
-        header.grid(row=0, column=0, columnspan=4, pady=(8, 12), sticky="e")
+        # الجديد:
+        hdr_box = ttk.Frame(self)
+        hdr_box.grid(row=0, column=0, columnspan=4, pady=(8, 4), sticky="n")
+
+        self.header = ttk.Label(
+            hdr_box,
+            text="إدخال تفاصيل المهمة",
+            style="Header.TLabel",
+            anchor="center",
+            justify="center",
+        )
+        self.header.pack()
+
+        self.header_date = ttk.Label(
+            hdr_box,
+            text="",                     # يُملأ في on_show
+            style="Header.TLabel",
+            anchor="center",
+            justify="center",
+        )
+        self.header_date.pack(pady=(4, 8))
+
 
         # ستايلات للتمييز البصري عند الخطأ
         _invalid_style = ttk.Style()
@@ -519,6 +539,12 @@ class TaskFormPage(tk.Frame):
         buttons.grid(row=4, column=0, columnspan=4, pady=12)
         self.btn_add = ttk.Button(buttons, text="إضافة المهمة", command=self.on_add_task, state="disabled")
         self.btn_add.grid(row=0, column=1, padx=8)
+        
+        # زر إعادة تعيين المؤقت تحت زر إضافة المهمة مباشرة
+        self.btn_reset_timer = ttk.Button(
+            buttons, text="إعادة تعيين المؤقت", command=self.on_reset_timer)
+        self.btn_reset_timer.grid(row=1, column=1, padx=8, pady=(6, 0))
+
 
         # صفّ اتصالات للخيط الخلفي + مؤشر تحميل
         self._q = queue.Queue()
@@ -547,6 +573,10 @@ class TaskFormPage(tk.Frame):
         self._timer_start()
 
         self._update_add_state()
+        
+        dt = self.controller.selected_date or date.today()
+        self.header_date.configure(text=f' {DAY_ABBR[dt.weekday()]} - {dt.strftime("%Y-%m-%d")}')
+
 
     # تمييز الحقول بصريًا عند الخطأ (يدعم Entry وCombobox)
     def _mark_valid(self, widget, ok: bool):
@@ -740,6 +770,17 @@ class TaskFormPage(tk.Frame):
         self.after(120, self._poll_append)
         return
     
+    def on_reset_timer(self):
+    # رسالة تأكيد قبل إعادة التعيين
+        if messagebox.askyesno("تأكيد", "هل تريد إعادة تعيين المؤقت؟"):
+            # إيقاف المؤقت الحالي (إن كان يعمل)، تصفيره، ثم بدء العد من جديد
+            try:
+                self._timer_stop()
+            except Exception:
+                pass
+            self._timer_reset()
+            self._timer_start()
+
     # ======== مؤقت المدة ========
     def _timer_reset(self):
         self._timer_running = False
