@@ -71,6 +71,7 @@ def get_worksheet():
         ws.insert_row(HEADERS, index=1)
 
     _WS = ws
+    _load_task_ids(ws)  # تحميل الـ Task IDs الموجودة عند أول اتصال
     return ws
 
 def append_task_row(row_values):
@@ -78,6 +79,32 @@ def append_task_row(row_values):
     ws = get_worksheet()
     ws.append_row(row_values, value_input_option="USER_ENTERED")
     return ws
+
+# كاش لمعرّفات المهام الموجودة
+_TASK_IDS = None
+
+def _load_task_ids(ws=None):
+    """تحميل كل قيم العمود A (Task ID) كـ set في الكاش."""
+    global _TASK_IDS
+    if ws is None:
+        ws = get_worksheet()
+    vals = ws.col_values(1)[1:]  # تجاهل صفّ العناوين
+    _TASK_IDS = {v.strip().lower() for v in vals if v and v.strip()}
+    return _TASK_IDS
+
+def task_id_exists(tid: str) -> bool:
+    """التحقّق السريع من التكرار من الكاش (ويُحمّل أول مرة عند الحاجة)."""
+    global _TASK_IDS
+    if _TASK_IDS is None:
+        _load_task_ids()
+    return tid.strip().lower() in _TASK_IDS
+
+def register_task_id(tid: str):
+    """تحديث الكاش محليًا بعد نجاح الإضافة."""
+    global _TASK_IDS
+    if _TASK_IDS is None:
+        _TASK_IDS = set()
+    _TASK_IDS.add(tid.strip().lower())
 
 # ===================== الواجهة =====================
 class App(tk.Tk):
@@ -668,7 +695,35 @@ class TaskFormPage(tk.Frame):
             messagebox.showerror("تحقق المدخلات", "\n".join(msgs))
             return False
 
-        return ok_tid and ok_rating
+        ok_tid      = bool(HEX24_RE.fullmatch(tid))
+        ok_rating   = (rating == "") or rating.isdigit()
+
+        # تحقّق التكرار من الكاش (خفيف وسريع)
+        ok_unique = True
+        if ok_tid:
+            try:
+                ok_unique = not task_id_exists(tid)
+            except Exception:
+                ok_unique = True  # في حال خطأ شبكة لا نمنع الإرسال هنا
+
+        # تلوين الحقول
+        rating_widget = getattr(self, "entry_rating", None) or getattr(self, "cmb_rating", None)
+        self._mark_valid(self.entry_task_id, ok_tid and ok_unique)
+        self._mark_valid(rating_widget, ok_rating)
+
+        if show_msg:
+            if not ok_tid:
+                messagebox.showerror("تحقق المدخلات", "Task ID يجب أن يطابق ^[0-9a-f]{24}$")
+                return False
+            if not ok_unique:
+                messagebox.showerror("تحقق المدخلات", "Task ID موجود مسبقًا في الشيت.")
+                return False
+            if not ok_rating:
+                messagebox.showerror("تحقق المدخلات", "rating (اختياري) يجب أن يكون رقمًا صحيحًا.")
+                return False
+
+        return ok_tid and ok_unique and ok_rating
+
 
     def _update_add_state(self, *args):
         """تفعيل زر الإضافة فقط عندما تتحقق القواعد أعلاه."""
@@ -701,10 +756,20 @@ class TaskFormPage(tk.Frame):
 
     def _worker_append(self, row):
         try:
-            ws = append_task_row(row)
+            ws = get_worksheet()
+            # تحقّق نهائي مضاد لظروف التسابق: اقرأ العمود A من الشيت مباشرة
+            existing = {v.strip().lower() for v in ws.col_values(1)[1:] if v and v.strip()}
+            tid = (row[0] or "").strip().lower()
+            if tid in existing:
+                self._q.put(("dup", tid))  # أبلغ الخيط الرئيسي بوجود تكرار
+                return
+
+            ws.append_row(row, value_input_option="USER_ENTERED")
+            register_task_id(tid)        # حدّث الكاش محليًا بعد النجاح
             self._q.put(("ok", ws))
         except Exception as e:
             self._q.put(("err", str(e)))
+
 
     def _poll_append(self):
         try:
@@ -744,6 +809,11 @@ class TaskFormPage(tk.Frame):
 
             # الانتقال لصفحة النجاح
             self.controller.show_frame("PostAddPage")
+
+        elif status == "dup":
+            self._set_busy(False)
+            self._timer_start()  # اختياري: استئناف المؤقّت بعد إلغاء الإرسال
+            messagebox.showerror("مكرر", f"Task ID موجود مسبقًا في الشيت: {payload}")
         else:
             # خطأ: أعد التفاعل وأظهر رسالة
             self._set_busy(False)
