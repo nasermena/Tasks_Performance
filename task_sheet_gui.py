@@ -143,7 +143,10 @@ class App(tk.Tk):
         self.selected_date = None
         self.selected_day_abbr = None
         self.selected_month_abbr = None
-        self.var_ot = tk.StringVar(value="No")  # القيمة الافتراضية، سيتم ضبطها تلقائيًا حسب لوس أنجلوس
+        self.var_ot = tk.StringVar()  # القيمة الافتراضية، سيتم ضبطها تلقائيًا حسب لوس أنجلوس
+        self.last_ot_us_date = None          # آخر يوم (LA) طُبّق عليه منطق الافتراضي
+        self.ot_user_override_date = None    # اليوم (LA) الذي غيّر فيه المستخدم القيمة
+        self.ot_user_override_value = None   # قيمة المستخدم لذلك اليوم
 
         # قيم افتراضية تُحفظ مؤقتًا داخل الجلسة
         self.last_defaults = {
@@ -327,8 +330,6 @@ class DatePage(tk.Frame):
         )
         self.calendar.pack(pady=10)
 
-        self._update_ot_default()
-
         self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")
         self.info_lbl.pack(pady=8)
 
@@ -337,25 +338,6 @@ class DatePage(tk.Frame):
         next_btn = ttk.Button(controls, text="التالي", command=self.on_next)
         next_btn.grid(row=0, column=1, padx=8)
 
-        # --- OT? block centered under the Next button ---
-        ot_box = ttk.Frame(self)
-        ot_box.pack(pady=(12, 24))  # فراغ عمودي مناسب
-
-        # العنوان فوق القائمة بخط كبير وواضح
-        ot_label = ttk.Label(ot_box, text="OT?", style="Header.TLabel", anchor="center", justify="center")
-        ot_label.pack(pady=(0, 6), fill="x")
-
-        # القائمة المنسدلة في المنتصف، بحجم خط أكبر
-        self.cmb_ot = ttk.Combobox(
-            ot_box,
-            textvariable=self.controller.var_ot,
-            values=["Yes", "No"],
-            state="readonly",
-            width=10,
-            justify="center",
-            style="Big.TCombobox"
-        )
-        self.cmb_ot.pack()
 
     def on_next(self):
         sel = self.calendar.get_date()
@@ -364,20 +346,12 @@ class DatePage(tk.Frame):
         except ValueError:
             messagebox.showerror("خطأ", "يرجى اختيار تاريخ صالح من التقويم.")
             return
-        self._update_ot_default()  # تأكيد تعيين OT الافتراضي وفق التاريخ المختار
         self.controller.set_date(dt)
         self.controller.show_frame("TaskFormPage")
         
         # مهم: فعّل حدث العرض كي يبدأ المؤقت
         self.controller.frames["TaskFormPage"].event_generate_show()
 
-    def _update_ot_default(self):
-        """Set OT default based on CURRENT LA weekday, not the selected calendar date."""
-        la = ZoneInfo("America/Los_Angeles")
-        us_now = datetime.now(la)
-        wd = us_now.weekday()  # Mon=0 .. Sun=6
-        # Yes on Fri/Sat (4,5); No on Sun–Thu
-        self.controller.var_ot.set("Yes" if wd in (4, 5) else "No")
 
 class TaskFormPage(tk.Frame):
     def __init__(self, parent, controller: App):
@@ -598,12 +572,35 @@ class TaskFormPage(tk.Frame):
             style="StatsLine.TLabel",
             anchor="e",
             justify="right"
-        ).pack()
+        ).pack(anchor="e")
 
+        # --- OT: بجانب القائمة المنسدلة أسفل السطر مباشرة ---
+        ot_row = ttk.Frame(stats_box)
+        ot_row.pack(pady=(8, 0), anchor="e")
+
+        ttk.Label(ot_row, text="OT:", anchor="e", justify="left")\
+            .grid(row=0, column=0, sticky="e", padx=(0, 6))
+
+        self.cmb_ot_in_form = ttk.Combobox(
+            ot_row,
+            textvariable=self.controller.var_ot,   # نفس متغير الحالة المستخدم سابقًا
+            values=["Yes", "No"],
+            state="readonly",
+            width=8,
+            justify="center"
+        )
+        self.cmb_ot_in_form.grid(row=0, column=1, sticky="e")
+
+        # ضبط أعمدة صف OT كي تبقى محاذاة لليمين
+        ot_row.columnconfigure(0, weight=0)
+        ot_row.columnconfigure(1, weight=0)
         # زر إعادة تعيين المؤقت تحت زر إضافة المهمة مباشرة
         self.btn_reset_timer = ttk.Button(
             buttons, text="إعادة تعيين المؤقت", command=self.on_reset_timer)
         self.btn_reset_timer.grid(row=1, column=1, padx=8, pady=(6, 0))
+
+
+        self.cmb_ot_in_form.bind("<<ComboboxSelected>>", self._on_ot_user_selected)
 
 
         # صفّ اتصالات للخيط الخلفي + مؤشر تحميل
@@ -618,6 +615,12 @@ class TaskFormPage(tk.Frame):
 
         # عند عرض الصفحة: تعبئة افتراضية وتحديث حالة الزر
         self.bind("<<ShowPage>>", self.on_show)
+
+    def _on_ot_user_selected(self, event=None):
+        # هذا يُستدعى فقط عند اختيار المستخدم من القائمة
+        us_today = self._current_us_date()
+        self.controller.ot_user_override_date = us_today
+        self.controller.ot_user_override_value = self.controller.var_ot.get()
 
     # مساعد لإطلاق حدث العرض عند العودة للصفحة
     def event_generate_show(self):
@@ -634,12 +637,30 @@ class TaskFormPage(tk.Frame):
         self.var_verdict.set(d.get("Verdict", ""))
         
         self._timer_start()
+                
+        us_today = self._current_us_date()
+
+        if self.controller.last_ot_us_date != us_today:
+            # يوم جديد في LA (أو أول مرة): طبّق الافتراضي ثم صفّر حالة override
+            self._set_ot_default_from_la_now()
+            self.controller.last_ot_us_date = us_today
+            self.controller.ot_user_override_date = None
+            self.controller.ot_user_override_value = None
+        else:
+            # نفس اليوم في LA:
+            if self.controller.ot_user_override_date == us_today and self.controller.ot_user_override_value:
+                # احترم اختيار المستخدم لنفس اليوم
+                self.controller.var_ot.set(self.controller.ot_user_override_value)
+            else:
+                # لا يوجد override (المستخدم لم يغيّر): أبقِ/أعد الافتراضي إن كانت فارغة
+                if not self.controller.var_ot.get():
+                    self._set_ot_default_from_la_now()
 
         self._update_add_state()
         
         self._refresh_tasks_count()
 
-        dt = self.controller.selected_date or date.today()
+        dt = date.today()
         self.header_date.configure(text=f' {DAY_ABBR[dt.weekday()]} - {dt.strftime("%Y-%m-%d")}')
 
 
@@ -928,7 +949,16 @@ class TaskFormPage(tk.Frame):
         if self._timer_running and self._t0 is not None:
             total += (time.perf_counter() - self._t0)
         return total / 3600.0
-        
+    
+    def _set_ot_default_from_la_now(self):
+        la = ZoneInfo("America/Los_Angeles")
+        wd = datetime.now(la).weekday()  # Mon=0..Sun=6
+        self.controller.var_ot.set("Yes" if wd in (4, 5) else "No") 
+
+    def _current_us_date(self) -> str:
+        la = ZoneInfo("America/Los_Angeles")
+        return datetime.now(la).date().isoformat()  # "YYYY-MM-DD"
+
 class PostAddPage(tk.Frame):
     def __init__(self, parent, controller: App):
         super().__init__(parent)
