@@ -9,8 +9,7 @@ Task Sheet GUI for Google Sheets
 
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
-from tkcalendar import Calendar
-from datetime import datetime, date
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import re
@@ -30,11 +29,9 @@ except Exception:
 # ملاحظة: حدّث المسار والـ Sheet/Worksheet حسب بيئتك
 SERVICE_ACCOUNT_FILE = r"C:\Users\Naser Rahal\ServiceAccountKey\service_account.json"
 
-# SHEET_ID = "1BJRzv4MXyrr3-cnD53eHcIMmB8XOSjSMwHNxthpdIrY"
-# WORKSHEET_TITLE = "Submitted_Tasks_Log"
-
-SHEET_ID = "19Juc5u43K4Xx3vU9yeyZVx5K-aRdOOm_c5etpfpcsWQ"
-WORKSHEET_TITLE = "Sheet1"
+# متغيّرات تُملأ من شاشة الإعداد
+RUNTIME_SHEET_ID = None
+RUNTIME_WORKSHEET_TITLE = None
 
 # ترتيب الأعمدة في الشيت (يجب أن يطابق ترتيب الصف المُرسل)
 HEADERS = [
@@ -55,23 +52,27 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # كاش بسيط للورقة لتقليل فتح الاتصال في كل إضافة
 _WS = None
 
+LA_TZ = ZoneInfo("America/Los_Angeles")
+JO_TZ = ZoneInfo("Asia/Amman")
+
 def get_worksheet():
-    """إرجاع Worksheet مع التأكد من وجود العناوين في الصف الأول (مرة واحدة)."""
-    global _WS
+    """ارجع Worksheet باستخدام القيم المُعطاة من شاشة الإعداد."""
+    global _WS, RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE
     if _WS is not None:
         return _WS
+    if not RUNTIME_SHEET_ID or not RUNTIME_WORKSHEET_TITLE:
+        raise RuntimeError("Sheet ID/Worksheet title are not set yet.")
 
     creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(SHEET_ID)       # فتح بالمعرف
-    ws = sh.worksheet(WORKSHEET_TITLE)  # تبويب محدد بالاسم
+    sh = gc.open_by_key(RUNTIME_SHEET_ID)
+    ws = sh.worksheet(RUNTIME_WORKSHEET_TITLE)
 
     header_row = ws.row_values(1)
     if not any(header_row):
         ws.insert_row(HEADERS, index=1)
 
     _WS = ws
-    _load_task_ids(ws)  # تحميل الـ Task IDs الموجودة عند أول اتصال
     return ws
 
 def append_task_row(row_values):
@@ -139,10 +140,6 @@ class App(tk.Tk):
         self.style.configure("Big.TCombobox", font=("Segoe UI", 14))
         self.style.configure("StatsLine.TLabel", font=("Segoe UI", 14, "bold"))
 
-        # حالة مشتركة للجلسة
-        self.selected_date = None
-        self.selected_day_abbr = None
-        self.selected_month_abbr = None
         self.var_ot = tk.StringVar()  # القيمة الافتراضية، سيتم ضبطها تلقائيًا حسب لوس أنجلوس
         self.last_ot_us_date = None          # آخر يوم (LA) طُبّق عليه منطق الافتراضي
         self.ot_user_override_date = None    # اليوم (LA) الذي غيّر فيه المستخدم القيمة
@@ -184,7 +181,7 @@ class App(tk.Tk):
 
         # تهيئة الصفحات
         self.frames = {}
-        for F in (StartPage, DatePage, TaskFormPage, PostAddPage):
+        for F in (StartPage, SheetConfigPage, TaskFormPage, PostAddPage):
             frame = F(parent=container, controller=self)
             self.frames[F.__name__] = frame
             frame.grid(row=0, column=0, sticky="nsew")
@@ -214,20 +211,6 @@ class App(tk.Tk):
             pass
 
 
-    def set_date(self, dt: date):
-        """تعيين التاريخ المختار وتوليد اختصارات اليوم/الشهر."""
-        self.selected_date = dt
-        weekday = dt.weekday()  # Mon=0..Sun=6
-        self.selected_day_abbr = DAY_ABBR[weekday]
-        self.selected_month_abbr = MONTH_ABBR[dt.month - 1]
-
-    def reset_session(self):
-        """إعادة الضبط داخل الجلسة."""
-        self.selected_date = None
-        self.selected_day_abbr = None
-        self.selected_month_abbr = None
-        for k in self.last_defaults:
-            self.last_defaults[k] = ""
 
     # -------- التحكم بالثيم ----------
     def _set_theme(self, name: str):
@@ -311,45 +294,55 @@ class StartPage(tk.Frame):
         lbl.pack(pady=40)
 
         btn = ttk.Button(self, text="ابدأ العمل", width=24,
-                         command=lambda: controller.show_frame("DatePage"))
+                         command=lambda: controller.show_frame("SheetConfigPage"))
         btn.pack(pady=6)
 
-class DatePage(tk.Frame):
+class SheetConfigPage(tk.Frame):
     def __init__(self, parent, controller: App):
         super().__init__(parent)
         self.controller = controller
 
-        title = ttk.Label(self, text="اختر التاريخ", style="Header.TLabel")
+        title = ttk.Label(self, text="إعدادات Google Sheets", style="Header.TLabel")
         title.pack(pady=16)
 
-        today = datetime.today()
-        self.calendar = Calendar(
-            self, selectmode="day",
-            year=today.year, month=today.month, day=today.day,
-            date_pattern="yyyy-mm-dd"
-        )
-        self.calendar.pack(pady=10)
+        form = ttk.Frame(self); form.pack(pady=10, padx=12)
 
-        self.info_lbl = ttk.Label(self, text="لن يتم الانتقال حتى تختار تاريخًا.")
-        self.info_lbl.pack(pady=8)
+        ttk.Label(form, text="Spreadsheet ID:").grid(row=0, column=0, sticky="e", padx=6, pady=6)
+        self.var_sheet_id = tk.StringVar()
+        ent_id = ttk.Entry(form, textvariable=self.var_sheet_id, width=48, justify="left")
+        ent_id.grid(row=0, column=1, sticky="we", padx=6, pady=6)
 
-        controls = ttk.Frame(self)
-        controls.pack(pady=16)
-        next_btn = ttk.Button(controls, text="التالي", command=self.on_next)
-        next_btn.grid(row=0, column=1, padx=8)
+        ttk.Label(form, text="Worksheet title:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
+        self.var_ws_title = tk.StringVar()
+        ent_ws = ttk.Entry(form, textvariable=self.var_ws_title, width=48, justify="left")
+        ent_ws.grid(row=1, column=1, sticky="we", padx=6, pady=6)
 
+        form.columnconfigure(1, weight=1)
+
+        ttk.Button(self, text="التالي", command=self.on_next).pack(pady=16)
 
     def on_next(self):
-        sel = self.calendar.get_date()
-        try:
-            dt = datetime.strptime(sel, "%Y-%m-%d").date()
-        except ValueError:
-            messagebox.showerror("خطأ", "يرجى اختيار تاريخ صالح من التقويم.")
+        sid = self.var_sheet_id.get().strip()
+        wst = self.var_ws_title.get().strip()
+        if not sid or not wst:
+            messagebox.showerror("خطأ", "يرجى إدخال كلٍ من Spreadsheet ID وWorksheet title.")
             return
-        self.controller.set_date(dt)
+
+        # جرّب الاتصال للتحقق
+        try:
+            global RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE, _WS, _TASK_IDS
+            RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE = sid, wst
+            _WS = None
+            try:
+                _TASK_IDS = None  # لو كنت تستخدم كاش Task IDs للتكرار
+            except NameError:
+                pass
+            get_worksheet()  # تأكيد صحة الإعداد
+        except Exception as e:
+            messagebox.showerror("فشل الاتصال", f"تعذّر فتح الورقة:\n{e}")
+            return
+
         self.controller.show_frame("TaskFormPage")
-        
-        # مهم: فعّل حدث العرض كي يبدأ المؤقت
         self.controller.frames["TaskFormPage"].event_generate_show()
 
 
@@ -358,9 +351,23 @@ class TaskFormPage(tk.Frame):
         super().__init__(parent)
         self.controller = controller
 
+        self._clock_job = None
+
         # الجديد:
         hdr_box = ttk.Frame(self)
-        hdr_box.grid(row=0, column=0, columnspan=4, pady=(8, 4), sticky="n")
+        hdr_box.grid(row=0, column=1, columnspan=2, pady=(8, 4), sticky="n")
+
+        # صندوق الوقت (US/LA) على اليسار - المربّع الأصفر
+        left_info = ttk.Frame(self)
+        left_info.grid(row=0, column=0, sticky="nw", padx=(8, 0), pady=(8, 0))
+        self.lbl_us_time = ttk.Label(left_info, text="", style="StatsLine.TLabel", anchor="w", justify="left")
+        self.lbl_us_time.pack()
+
+        # صندوق الوقت (الأردن/عمّان) على اليمين - المربّع الأحمر
+        right_info = ttk.Frame(self)
+        right_info.grid(row=0, column=3, sticky="ne", padx=(0, 8), pady=(8, 0))
+        self.lbl_jo_time = ttk.Label(right_info, text="", style="StatsLine.TLabel", anchor="e", justify="right")
+        self.lbl_jo_time.pack()
 
         self.header = ttk.Label(
             hdr_box,
@@ -371,14 +378,17 @@ class TaskFormPage(tk.Frame):
         )
         self.header.pack()
 
-        self.header_date = ttk.Label(
-            hdr_box,
-            text="",                     # يُملأ في on_show
-            style="Header.TLabel",
-            anchor="center",
-            justify="center",
+        # التاريخ المحلي (الأردن) في السطر الأول
+        self.header_date_local = ttk.Label(
+            hdr_box, text="", style="Header.TLabel", anchor="center", justify="center"
         )
-        self.header_date.pack(pady=(4, 8))
+        self.header_date_local.pack(pady=(4, 0))
+
+        # تاريخ لوس أنجلِس في السطر الثاني تحت المحلي
+        self.header_date_us = ttk.Label(
+            hdr_box, text="", style="Header.TLabel", anchor="center", justify="center"
+        )
+        self.header_date_us.pack(pady=(2, 0))
 
 
         # ستايلات للتمييز البصري عند الخطأ
@@ -482,13 +492,12 @@ class TaskFormPage(tk.Frame):
         self.var_rating = tk.StringVar()
         self.cmb_rating = ttk.Combobox(
             right_card, textvariable=self.var_rating,
-            values=["1", "2", "3", "4", "5"], state="normal", justify="left"
+            values=["1", "2", "3", "4", "5"], state="readonly", justify="left"
         )
         self.cmb_rating.grid(row=1, column=1, sticky="we", padx=6, pady=6)
-        # تحقق لحظي للأرقام الصحيحة أو فراغ
-        _vcmd_int = (self.register(lambda P: (P.isdigit() or P == "")), "%P")
-        self.cmb_rating.configure(validate="key", validatecommand=_vcmd_int)
-        self.cmb_rating.bind("<<ComboboxSelected>>", lambda e: self._update_add_state())
+
+        self.cmb_rating.bind("<<ComboboxSelected>>", self._update_add_state)
+
 
 
         for c in (0, 1):
@@ -540,7 +549,7 @@ class TaskFormPage(tk.Frame):
                 vals.append(val)
                 combo.configure(values=vals)
 
-        for cmb in (self.cmb_rating, self.cmb_level, self.cmb_verdict, self.cmb_project):
+        for cmb in (self.cmb_level, self.cmb_verdict, self.cmb_project):
             cmb.bind("<<ComboboxSelected>>", lambda e, c=cmb: _ensure_in_values(c))
             cmb.bind("<FocusOut>",           lambda e, c=cmb: _ensure_in_values(c))
             
@@ -587,7 +596,8 @@ class TaskFormPage(tk.Frame):
             values=["Yes", "No"],
             state="readonly",
             width=8,
-            justify="center"
+            justify="center",
+            style="Big.TCombobox"
         )
         self.cmb_ot_in_form.grid(row=0, column=1, sticky="e")
 
@@ -657,11 +667,14 @@ class TaskFormPage(tk.Frame):
                     self._set_ot_default_from_la_now()
 
         self._update_add_state()
-        
+        self._update_header_dates()
         self._refresh_tasks_count()
 
-        dt = date.today()
-        self.header_date.configure(text=f' {DAY_ABBR[dt.weekday()]} - {dt.strftime("%Y-%m-%d")}')
+        # ألغِ أي مؤقّت سابق ثم ابدأ التحديثات
+        if getattr(self, "_clock_job", None):
+            try: self.after_cancel(self._clock_job)
+            except Exception: pass
+        self._tick_clocks()
 
 
     # تمييز الحقول بصريًا عند الخطأ (يدعم Entry وCombobox)
@@ -674,61 +687,28 @@ class TaskFormPage(tk.Frame):
         except Exception:
             pass
 
-    # تحقق بسيط للعدد العشري
-    def _is_float(self, s: str) -> bool:
-        try:
-            float(s.strip())
-            return True
-        except Exception:
-            return False
 
     def _validate_all(self, show_msg: bool = False) -> bool:
-        """القواعد:
-        - Task ID إلزامي ويجب أن يطابق ^[0-9a-f]{24}$ (نحوّل لما دوني قبل التحقق).
-        - rating اختياري: إن أُدخل يجب أن يكون رقمًا صحيحًا.
-        """
-        # تطبيع الـ Task ID إلى حروف صغيرة قبل التحقق
         tid_raw = self.var_task_id.get().strip()
         tid = tid_raw.lower()
         if tid != tid_raw:
             self.var_task_id.set(tid)
 
-        rating   = self.var_rating.get().strip()
+        rating = self.var_rating.get().strip()
 
-        ok_tid      = bool(HEX24_RE.fullmatch(tid))
-        ok_rating   = (rating == "") or rating.isdigit()
+        ok_tid    = bool(HEX24_RE.fullmatch(tid))
+        ok_rating = (rating == "") or rating.isdigit()
 
-        # اختيار الودجت الصحيح للتلوين (Entry/Combobox)
-        rating_widget   = getattr(self, "entry_rating", None) or getattr(self, "cmb_rating", None)
-
-        # تلوين الحقول حسب الصحة
-        self._mark_valid(self.entry_task_id, ok_tid)
-        self._mark_valid(rating_widget, ok_rating)
-
-        # رسائل خطأ عند الطلب
-        if not ok_tid and show_msg:
-            messagebox.showerror("تحقق المدخلات", "Task ID يجب أن يطابق النمط: ^[0-9a-f]{24}$ (حروف صغيرة فقط).")
-            return False
-        if ok_tid and (not ok_rating) and show_msg:
-            msgs = []
-            if not ok_rating:
-                msgs.append("rating (اختياري): إن أُدخل يجب أن يكون رقمًا صحيحًا فقط.")
-            messagebox.showerror("تحقق المدخلات", "\n".join(msgs))
-            return False
-
-        ok_tid      = bool(HEX24_RE.fullmatch(tid))
-        ok_rating   = (rating == "") or rating.isdigit()
-
-        # تحقّق التكرار من الكاش (خفيف وسريع)
+        # تحقّق تكرار Task ID من الكاش
         ok_unique = True
         if ok_tid:
             try:
                 ok_unique = not task_id_exists(tid)
             except Exception:
-                ok_unique = True  # في حال خطأ شبكة لا نمنع الإرسال هنا
+                ok_unique = True
 
         # تلوين الحقول
-        rating_widget = getattr(self, "entry_rating", None) or getattr(self, "cmb_rating", None)
+        rating_widget = getattr(self, "cmb_rating", None)
         self._mark_valid(self.entry_task_id, ok_tid and ok_unique)
         self._mark_valid(rating_widget, ok_rating)
 
@@ -842,10 +822,6 @@ class TaskFormPage(tk.Frame):
 
 
     def on_add_task(self):
-        """التحقق النهائي وبناء الصف وإرساله إلى Google Sheets."""
-        if not self.controller.selected_date:
-            messagebox.showerror("خطأ", "يرجى اختيار التاريخ أولاً.")
-            return
 
         # بوابة نهائية: في حال وجود أخطاء يمنع الإرسال ويعرض الرسائل
         if not self._validate_all(show_msg=True):
@@ -858,10 +834,16 @@ class TaskFormPage(tk.Frame):
         prompt = self.txt_prompt.get("1.0", "end").strip()
         just   = self.txt_just.get("1.0", "end").strip()
         feed   = self.txt_feedback.get("1.0", "end").strip()
-        
-        submitted_now = datetime.now().strftime("%H:%M")  # وقت الآن ساعات:دقائق
 
-        la = ZoneInfo("America/Los_Angeles")
+        # وقت الآن محلي (الأردن)
+        jo = JO_TZ
+        now_jo = datetime.now(jo)
+        submitted_now = now_jo.strftime("%H:%M")            # Submitted time (محلي)
+        local_date  = now_jo.strftime("%Y-%m-%d")
+        local_day   = DAY_ABBR[now_jo.weekday()]
+        local_month = MONTH_ABBR[now_jo.month - 1]
+
+        la = LA_TZ
         us_now = datetime.now(la)
         submitted_us = us_now.strftime("%H:%M")
 
@@ -880,9 +862,9 @@ class TaskFormPage(tk.Frame):
             duration_hours,
             self.var_level.get().strip(),
             self.var_verdict.get().strip(),
-            self.controller.selected_date.strftime("%Y-%m-%d"),
-            self.controller.selected_day_abbr,
-            self.controller.selected_month_abbr,
+            local_date,
+            local_day,
+            local_month, 
             submitted_now,
             us_date,            # Date (US)
             us_day_abbr,        # Day (US)
@@ -951,13 +933,49 @@ class TaskFormPage(tk.Frame):
         return total / 3600.0
     
     def _set_ot_default_from_la_now(self):
-        la = ZoneInfo("America/Los_Angeles")
+        la = LA_TZ
         wd = datetime.now(la).weekday()  # Mon=0..Sun=6
         self.controller.var_ot.set("Yes" if wd in (4, 5) else "No") 
 
     def _current_us_date(self) -> str:
-        la = ZoneInfo("America/Los_Angeles")
+        la = LA_TZ
         return datetime.now(la).date().isoformat()  # "YYYY-MM-DD"
+    
+    def _update_header_dates(self):
+        # عمّان (محلي)
+        jo = JO_TZ
+        now_jo = datetime.now(jo)
+        day_local = DAY_ABBR[now_jo.weekday()]            # Mon..Sun
+        self.header_date_local.configure(
+            text=f"{day_local} - {now_jo.strftime('%Y-%m-%d')} (JOR)"
+        )
+
+        # لوس أنجلِس (US)
+        la = LA_TZ
+        now_la = datetime.now(la)
+        day_us = DAY_ABBR[now_la.weekday()]
+        self.header_date_us.configure(
+            text=f"{day_us} - {now_la.strftime('%Y-%m-%d')} (US)"
+        )
+
+
+    def _tick_clocks(self):
+        # US (Los Angeles) time 24h
+        la = LA_TZ
+        now_la = datetime.now(la).strftime("%H:%M:%S")
+        self.lbl_us_time.configure(text=f"الوقت الآن (لوس أنجلِس): {now_la}")
+
+        # Jordan (Amman) time 24h
+        jo = JO_TZ
+        now_jo = datetime.now(jo).strftime("%H:%M:%S")
+        self.lbl_jo_time.configure(text=f"الوقت الآن (الأردن): {now_jo}")
+
+        # حدّث التاريخ/اليوم الأمريكي تحت العنوان
+        # self._update_header_us_date()
+
+        # حدّث كل ثانية
+        self._clock_job = self.after(1000, self._tick_clocks)
+
 
 class PostAddPage(tk.Frame):
     def __init__(self, parent, controller: App):
