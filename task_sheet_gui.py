@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
 """
 Task Sheet GUI for Google Sheets
-- التدفق: البداية -> اختيار التاريخ -> تعبئة نموذج المهمة -> ما بعد الإضافة
-- المتطلبات: pip install gspread google-auth tkcalendar
-- الثيم الداكن/النهاري (اختياري): pip install sv-ttk
-- المصداقية: حفظ الصفوف باستخدام USER_ENTERED ليطبّق قواعد Google Sheets تلقائيًا.
+
+التدفق:
+- البداية → إعدادات Google Sheets → تعبئة نموذج المهمة → ما بعد الإضافة
+
+المتطلبات:
+- pip install gspread google-auth
+- (اختياري) pip install sv-ttk
 """
 
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
+import csv, os
 
 import re
 import time
@@ -80,6 +84,31 @@ def append_task_row(row_values):
     ws = get_worksheet()
     ws.append_row(row_values, value_input_option="USER_ENTERED")
     return ws
+
+def export_current_worksheet_to_csv(dest_path=None):
+    """
+    يحمّل كامل الورقة الحالية من Google Sheets ويحفظها كملف CSV في نفس مجلد البرنامج.
+    الاسم يتضمن عنوان السبريدشيت + الورقة + طابع زمني لسهولة التتبع.
+    """
+    ws = get_worksheet()
+    values = ws.get_all_values()  # يرجع قائمة قوائم لكل القيم في الورقة
+
+    # اسم ملف افتراضي داخل المجلد الحالي
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # تنظيف الأسماء من الأحرف غير الصالحة لأسماء الملفات على ويندوز
+    def _safe(name: str) -> str:
+        return re.sub(r'[\\/*?:"<>|]', "_", name)
+
+    if dest_path is None:
+        fname = f"{_safe(ws.spreadsheet.title)}__{_safe(ws.title)}__{ts}.csv"
+        dest_path = os.path.join(os.getcwd(), fname)
+
+    # ترميز UTF-8 مع BOM لتحسين التوافق مع Excel
+    with open(dest_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerows(values)
+
+    return dest_path
 
 # كاش لمعرّفات المهام الموجودة
 _TASK_IDS = None
@@ -210,6 +239,92 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _ot_default_for_weekday(self, wd: int) -> str:
+        # Mon=0 .. Sun=6 (Python weekday)
+        # الافتراضي Yes على Fri(4), Sat(5)؛ غير ذلك No
+        return "Yes" if wd in (4, 5) else "No"
+
+    def _current_la_now(self):
+        return datetime.now(LA_TZ)
+
+    def _maybe_rollover_ot_with_prompt(self, parent_widget) -> None:
+        """
+        يطبّق منطق OT لليوم الحالي بتوقيت لوس أنجلِس.
+        - أول تشغيل: يضبط الافتراضي فقط إذا كانت القيمة فارغة.
+        - عند تغيّر اليوم (LA): يطبّق السيناريوهات، وقد يعرض رسالة تأكيد حسب الحالة.
+        """
+        # هجرة احتمال أن last_ot_us_date محفوظ كنص قديم
+        if isinstance(self.last_ot_us_date, str):
+            try:
+                self.last_ot_us_date = date.fromisoformat(self.last_ot_us_date)
+            except Exception:
+                self.last_ot_us_date = None
+
+        la_now = self._current_la_now()
+        today_date = la_now.date()            # date
+        today_wd   = la_now.weekday()         # Mon=0..Sun=6
+
+        def _default_for(wd: int) -> str:
+            return "Yes" if wd in (4, 5) else "No"
+
+        new_default = _default_for(today_wd)
+
+        # أول مرة (تشغيل التطبيق ولم نسجّل يومًا بعد)
+        if self.last_ot_us_date is None:
+            if not self.var_ot.get():
+                self.var_ot.set(new_default)
+            self.last_ot_us_date = today_date
+            return
+
+        # نفس اليوم: لا شيء
+        if today_date == self.last_ot_us_date:
+            return
+
+        # يوم جديد
+        prev_wd = self.last_ot_us_date.weekday()
+        # إن كانت القيمة الحالية فارغة لأي سبب، اعتبرها افتراضي اليوم السابق
+        cur = self.var_ot.get() or _default_for(prev_wd)
+
+        # ابدأ False ثم فعّل حسب الشروط
+        show_prompt = False
+
+        # (أ) إجباري: Thu(3) -> Fri(4) أو Sat(5) -> Sun(6) اعرض رسالة دائمًا
+        if (prev_wd == 3 and today_wd == 4) or (prev_wd == 5 and today_wd == 6):
+            show_prompt = True
+        # (ب) Sun..Wed: اعرض رسالة فقط إذا كانت القيمة الحالية Yes (تغيير يدوي سابق)
+        elif today_wd in (6, 0, 1, 2) and cur == "Yes":
+            show_prompt = True
+        # (ج) Fri أو Sat دون انتقال خاص: لا رسالة (يبقى False)
+
+        if show_prompt:
+            msg = f"حالة OT الحالية هي {cur}. هل تريد تغييرها إلى القيمة الافتراضية ({new_default})؟"
+            apply_default = messagebox.askyesno(
+                "تغيير حالة OT لليوم الجديد (بتوقيت لوس أنجلِس)",
+                msg,
+                parent=parent_widget
+            )
+            if apply_default:
+                # “نعم”: طبّق الافتراضي لليوم الجديد
+                self.var_ot.set(new_default)
+            else:
+                # “لا”: فروع خاصة حسب الانتقال
+                if prev_wd == 5 and today_wd == 6:
+                    # سبت -> أحد: اجبرها Yes
+                    self.var_ot.set("Yes")
+                elif prev_wd == 3 and today_wd == 4:
+                    # خميس -> جمعة: اضبطها No صراحةً
+                    self.var_ot.set("No")
+                else:
+                    # باقي الحالات: أبقِ الحالية
+                    self.var_ot.set(cur)
+        else:
+            # لا رسالة: طبّق الافتراضي مباشرةً
+            self.var_ot.set(new_default)
+
+        # حدّث تاريخ آخر تطبيق
+        self.last_ot_us_date = today_date
+
+
 
 
     # -------- التحكم بالثيم ----------
@@ -321,6 +436,26 @@ class SheetConfigPage(tk.Frame):
 
         ttk.Button(self, text="التالي", command=self.on_next).pack(pady=16)
 
+        # --- OT under the Next button ---
+        ot_row = ttk.Frame(self)
+        ot_row.pack(pady=(10, 0))
+
+        ttk.Label(ot_row, text="OT?", style="Header.TLabel").grid(row=0, column=0, padx=(0, 8))
+        self.cmb_ot_cfg = ttk.Combobox(
+            ot_row,
+            textvariable=self.controller.var_ot,
+            values=["Yes", "No"],
+            state="readonly",
+            width=8,
+            justify="center",
+            style="Big.TCombobox"
+        )
+        self.cmb_ot_cfg.grid(row=0, column=1)
+
+        # عند فتح الصفحة/العودة لها، اضبط الافتراضي أو نفّذ منطق اليوم الجديد (مع الرسالة)
+        self.bind("<<ShowPage>>", lambda e: self.controller._maybe_rollover_ot_with_prompt(self))
+
+
     def on_next(self):
         sid = self.var_sheet_id.get().strip()
         wst = self.var_ws_title.get().strip()
@@ -328,20 +463,18 @@ class SheetConfigPage(tk.Frame):
             messagebox.showerror("خطأ", "يرجى إدخال كلٍ من Spreadsheet ID وWorksheet title.")
             return
 
-        # جرّب الاتصال للتحقق
         try:
             global RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE, _WS, _TASK_IDS
             RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE = sid, wst
             _WS = None
-            try:
-                _TASK_IDS = None  # لو كنت تستخدم كاش Task IDs للتكرار
-            except NameError:
-                pass
-            get_worksheet()  # تأكيد صحة الإعداد
+            _TASK_IDS = None
+            get_worksheet()
         except Exception as e:
             messagebox.showerror("فشل الاتصال", f"تعذّر فتح الورقة:\n{e}")
             return
 
+        # تأكد من منطق OT قبل الانتقال
+        self.controller._maybe_rollover_ot_with_prompt(self)
         self.controller.show_frame("TaskFormPage")
         self.controller.frames["TaskFormPage"].event_generate_show()
 
@@ -583,35 +716,10 @@ class TaskFormPage(tk.Frame):
             justify="right"
         ).pack(anchor="e")
 
-        # --- OT: بجانب القائمة المنسدلة أسفل السطر مباشرة ---
-        ot_row = ttk.Frame(stats_box)
-        ot_row.pack(pady=(8, 0), anchor="e")
-
-        ttk.Label(ot_row, text="OT:", anchor="e", justify="left")\
-            .grid(row=0, column=0, sticky="e", padx=(0, 6))
-
-        self.cmb_ot_in_form = ttk.Combobox(
-            ot_row,
-            textvariable=self.controller.var_ot,   # نفس متغير الحالة المستخدم سابقًا
-            values=["Yes", "No"],
-            state="readonly",
-            width=8,
-            justify="center",
-            style="Big.TCombobox"
-        )
-        self.cmb_ot_in_form.grid(row=0, column=1, sticky="e")
-
-        # ضبط أعمدة صف OT كي تبقى محاذاة لليمين
-        ot_row.columnconfigure(0, weight=0)
-        ot_row.columnconfigure(1, weight=0)
         # زر إعادة تعيين المؤقت تحت زر إضافة المهمة مباشرة
         self.btn_reset_timer = ttk.Button(
             buttons, text="إعادة تعيين المؤقت", command=self.on_reset_timer)
         self.btn_reset_timer.grid(row=1, column=1, padx=8, pady=(6, 0))
-
-
-        self.cmb_ot_in_form.bind("<<ComboboxSelected>>", self._on_ot_user_selected)
-
 
         # صفّ اتصالات للخيط الخلفي + مؤشر تحميل
         self._q = queue.Queue()
@@ -626,12 +734,6 @@ class TaskFormPage(tk.Frame):
         # عند عرض الصفحة: تعبئة افتراضية وتحديث حالة الزر
         self.bind("<<ShowPage>>", self.on_show)
 
-    def _on_ot_user_selected(self, event=None):
-        # هذا يُستدعى فقط عند اختيار المستخدم من القائمة
-        us_today = self._current_us_date()
-        self.controller.ot_user_override_date = us_today
-        self.controller.ot_user_override_value = self.controller.var_ot.get()
-
     # مساعد لإطلاق حدث العرض عند العودة للصفحة
     def event_generate_show(self):
         self.event_generate("<<ShowPage>>")
@@ -640,41 +742,31 @@ class TaskFormPage(tk.Frame):
         self.var_stats_line.set(f"عدد المهام المسلّمة حتى الآن: {self.controller.session_submitted}")
 
     def on_show(self, event=None):
-        """تعبئة القيم الافتراضية، وتحديث وقت الإرسال إن كان فارغًا، وتحديث حالة الزر."""
+        # تعبئة القيم الافتراضية للحقول المحفوظة
         d = self.controller.last_defaults
         self.var_project.set(d.get("Project", ""))
         self.var_level.set(d.get("Level", ""))
         self.var_verdict.set(d.get("Verdict", ""))
-        
+
+        # مؤقّت المهمة
         self._timer_start()
-                
-        us_today = self._current_us_date()
 
-        if self.controller.last_ot_us_date != us_today:
-            # يوم جديد في LA (أو أول مرة): طبّق الافتراضي ثم صفّر حالة override
-            self._set_ot_default_from_la_now()
-            self.controller.last_ot_us_date = us_today
-            self.controller.ot_user_override_date = None
-            self.controller.ot_user_override_value = None
-        else:
-            # نفس اليوم في LA:
-            if self.controller.ot_user_override_date == us_today and self.controller.ot_user_override_value:
-                # احترم اختيار المستخدم لنفس اليوم
-                self.controller.var_ot.set(self.controller.ot_user_override_value)
-            else:
-                # لا يوجد override (المستخدم لم يغيّر): أبقِ/أعد الافتراضي إن كانت فارغة
-                if not self.controller.var_ot.get():
-                    self._set_ot_default_from_la_now()
+        # منطق OT (يتكفّل بالافتراضيات والتنبيه عند دخول يوم جديد)
+        self.controller._maybe_rollover_ot_with_prompt(self)
 
+        # واجهة
         self._update_add_state()
         self._update_header_dates()
         self._refresh_tasks_count()
 
-        # ألغِ أي مؤقّت سابق ثم ابدأ التحديثات
+        # تشغيل ساعات العرض (اليمين/اليسار)
         if getattr(self, "_clock_job", None):
-            try: self.after_cancel(self._clock_job)
-            except Exception: pass
+            try:
+                self.after_cancel(self._clock_job)
+            except Exception:
+                pass
         self._tick_clocks()
+
 
 
     # تمييز الحقول بصريًا عند الخطأ (يدعم Entry وCombobox)
@@ -826,6 +918,8 @@ class TaskFormPage(tk.Frame):
         # بوابة نهائية: في حال وجود أخطاء يمنع الإرسال ويعرض الرسائل
         if not self._validate_all(show_msg=True):
             return
+        
+        self.controller._maybe_rollover_ot_with_prompt(self)
 
         self._timer_stop()
         duration_hours = f"{self._timer_hours():.2f}"  # مثال: 0.75 ساعة
@@ -932,14 +1026,6 @@ class TaskFormPage(tk.Frame):
             total += (time.perf_counter() - self._t0)
         return total / 3600.0
     
-    def _set_ot_default_from_la_now(self):
-        la = LA_TZ
-        wd = datetime.now(la).weekday()  # Mon=0..Sun=6
-        self.controller.var_ot.set("Yes" if wd in (4, 5) else "No") 
-
-    def _current_us_date(self) -> str:
-        la = LA_TZ
-        return datetime.now(la).date().isoformat()  # "YYYY-MM-DD"
     
     def _update_header_dates(self):
         # عمّان (محلي)
@@ -1012,7 +1098,19 @@ class PostAddPage(tk.Frame):
         self.controller.frames["TaskFormPage"].event_generate_show()
 
     def finish_work(self):
-        # إغلاق نافذة التطبيق
+        # رسالة تأكيد: هل تريد حفظ نسخة CSV قبل الإنهاء؟
+        save = messagebox.askyesno(
+            "تأكيد الإنهاء",
+            "هل تريد حفظ الملف (CSV) قبل إنهاء العمل؟",
+            parent=self
+        )
+        if save:
+            try:
+                path = export_current_worksheet_to_csv()
+                messagebox.showinfo("تم الحفظ", f"تم حفظ الملف:\n{path}", parent=self)
+            except Exception as e:
+                messagebox.showerror("فشل الحفظ", f"تعذّر حفظ الملف:\n{e}", parent=self)
+        # أغلِق التطبيق على أي حال بعد الإجابة
         self.controller.destroy()
 
 if __name__ == "__main__":
