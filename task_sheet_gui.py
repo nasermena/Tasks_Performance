@@ -816,8 +816,8 @@ class TaskFormPage(tk.Frame):
         self.entry_task_id.grid(row=0, column=1, sticky="we", padx=6, pady=6)
 
         # تحقق لحظي: حتى 24 خانة [0-9a-fA-F]، والفراغ مسموح (أثناء الكتابة)
-        _vcmd_hex = (self.register(lambda P: (P == "" or re.fullmatch(r"[0-9a-fA-F]{0,24}", P) is not None)), "%P")
-        self.entry_task_id.configure(validate="key", validatecommand=_vcmd_hex)
+        # _vcmd_hex = (self.register(lambda P: (P == "" or re.fullmatch(r"[0-9a-fA-F]{0,24}", P) is not None)), "%P")
+        # self.entry_task_id.configure(validate="key", validatecommand=_vcmd_hex)
 
         # لصق مُنظَّف (يحذف غير-hex، يقتطع إلى 24، يحوّل إلى حروف صغيرة)
         def _on_paste_tid(event=None):
@@ -825,7 +825,8 @@ class TaskFormPage(tk.Frame):
                 s = self.clipboard_get()
             except tk.TclError:
                 return "break"
-            clean = re.sub(r"[^0-9a-fA-F]", "", s)[:24].lower()
+            # clean = re.sub(r"[^0-9a-fA-F]", "", s)[:24].lower()
+            clean = s.strip()
             self.var_task_id.set(clean)
             self.entry_task_id.icursor("end")
             self._update_add_state()
@@ -1060,7 +1061,8 @@ class TaskFormPage(tk.Frame):
 
         rating = self.var_rating.get().strip()
 
-        ok_tid    = bool(HEX24_RE.fullmatch(tid))
+        # 
+        ok_tid    = (tid != "")
         ok_rating = (rating == "") or rating.isdigit()
 
         # تحقّق تكرار Task ID من الكاش
