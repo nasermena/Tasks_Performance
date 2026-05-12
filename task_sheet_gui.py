@@ -54,7 +54,7 @@ RUNTIME_WORKSHEET_TITLE = None
 # ترتيب الأعمدة في الشيت (يجب أن يطابق ترتيب الصف المُرسل)
 HEADERS = [
     "Task ID", "The prompt", "Justification", "Feedback", "Rating", "Project", "Task duration (hour)", "Level", "Verdict",
-    "Date", "Day", "Month", "Month (num)", "Started Time", "Submitted time", "Date (US)", "Day (US)", "Month (US)", "Month (num_US)", "Started Time (US)", "Submitted time (US)", "OT",
+    "Date", "Day", "Year", "Month", "Month (num)", "Started Time", "Submitted time", "Date (US)", "Day (US)", "Year (US)","Month (US)", "Month (num_US)", "Started Time (US)", "Submitted time (US)", "OT",
 ]
 
 # اختصارات الأشهر/الأيام (بالإنجليزية لتفادي مشاكل locale)
@@ -1208,6 +1208,7 @@ class TaskFormPage(tk.Frame):
         submitted_now = now_jo.strftime("%H:%M")            # Submitted time (محلي)
         local_date  = now_jo.strftime("%Y-%m-%d")
         local_day   = DAY_ABBR[now_jo.weekday()]
+        local_year  = str(now_jo.year)
         local_month = MONTH_ABBR[now_jo.month - 1]
         local_month_num = str(now_jo.month)  
 
@@ -1217,6 +1218,7 @@ class TaskFormPage(tk.Frame):
 
         us_date = us_now.strftime("%Y-%m-%d")
         us_day_abbr = DAY_ABBR[us_now.weekday()]
+        us_year = str(us_now.year)
         us_month_abbr = MONTH_ABBR[us_now.month - 1]
         us_month_num = str(us_now.month)
 
@@ -1233,12 +1235,14 @@ class TaskFormPage(tk.Frame):
             self.var_verdict.get().strip(),
             local_date,
             local_day,
+            local_year,
             local_month, 
             local_month_num,
             self.task_start_local,
             submitted_now,
             us_date,            # Date (US)
             us_day_abbr,        # Day (US)
+            us_year,            # Year (US)
             us_month_abbr,      # Month (US)
             us_month_num,
             self.task_start_us,
