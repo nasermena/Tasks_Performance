@@ -13,18 +13,8 @@ Task Sheet GUI for Google Sheets
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk, filedialog
 from datetime import datetime, date
-from zoneinfo import ZoneInfo
-import csv
-from pathlib import Path
-import json
-import os
-
-import re
 import time
 import threading, queue
-
-import gspread
-from google.oauth2.service_account import Credentials
 
 # محاولة استيراد sv_ttk (اختياري). إن لم يوجد، نستمر بدون كسر البرنامج.
 try:
@@ -32,309 +22,27 @@ try:
 except Exception:
     sv_ttk = None
 
-# ===================== الإعدادات =====================
-# ملاحظة: حدّث المسار والـ Sheet/Worksheet حسب بيئتك
+# ===================== Imports from split modules =====================
 
-# أولوية المصدر: متغيّر بيئي ثم الإعدادات المحفوظة، وإلا نطلبه من المستخدم
-def _get_service_account_path_from_env_or_cfg() -> str | None:
-    env_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if env_path and os.path.exists(env_path):
-        return env_path
-    cfg = _load_cfg()
-    cfg_path = cfg.get("service_account_file")
-    if cfg_path and os.path.exists(cfg_path):
-        return cfg_path
-    return None
+from config import HEADERS, MONTH_ABBR, DAY_ABBR, LA_TZ, JO_TZ
+from cfg_store import _load_cfg, _save_cfg
+from sheets_backend import (
+    get_worksheet,
+    export_current_worksheet_to_csv,
+    task_id_exists,
+    register_task_id,
+    compute_today_hours_from_current_sheet,
+    update_daily_hours_in_external_sheet,
+    upsert_wfh_row_if_needed,
+    set_runtime_config,
+)
+import sheets_backend as _sb
 
-
-# متغيّرات تُملأ من شاشة الإعداد
-RUNTIME_SHEET_ID = None
-RUNTIME_WORKSHEET_TITLE = None
-
-# ترتيب الأعمدة في الشيت (يجب أن يطابق ترتيب الصف المُرسل)
-HEADERS = [
-    "Task ID", "The prompt", "Justification", "Feedback", "Rating", "Project", "Task duration (hour)", "Level", "Verdict",
-    "Date", "Day", "Year", "Month", "Month (num)", "Started Time", "Submitted time", "Date (US)", "Day (US)", "Year (US)","Month (US)", "Month (num_US)", "Started Time (US)", "Submitted time (US)", "OT",
-]
-
-# اختصارات الأشهر/الأيام (بالإنجليزية لتفادي مشاكل locale)
-MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-DAY_ABBR   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-
-# نمط Task ID المطلوب (24 خانة hex صغيرة)
-HEX24_RE = re.compile(r'^[0-9a-f]{24}$')
-
-# ===================== Google Sheets Helpers =====================
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-# ==== External sheet (not owned by me) ====
-EXTERNAL_SHEET_ID = "1SEYwEPHgDDx6KVLKNZ4xbnuXMCVbCy7E9BgXvppkedA"  # <-- عدّلها
-DAILY_HOURS_SHEET = "Daily Hours"
-WFH_SHEET = "WFH"
-
-PERSON_FULLNAME_FOR_DAILY = "Naser Basim Naser Rahhal"  # عمود A في Daily Hours
-PERSON_NAME_FOR_WFH = "Naser Rahhal"                    # عمود A في WFH
-
-
-# كاش بسيط للورقة لتقليل فتح الاتصال في كل إضافة
-_WS = None
-
-LA_TZ = ZoneInfo("America/Los_Angeles")
-JO_TZ = ZoneInfo("Asia/Amman")
-
-def get_worksheet():
-    """ارجع Worksheet باستخدام القيم المُعطاة من شاشة الإعداد."""
-    global _WS, RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE
-    if _WS is not None:
-        return _WS
-    if not RUNTIME_SHEET_ID or not RUNTIME_WORKSHEET_TITLE:
-        raise RuntimeError("Sheet ID/Worksheet title are not set yet.")
-
-    creds_path = _get_service_account_path_from_env_or_cfg()
-    if not creds_path:
-        creds_path = filedialog.askopenfilename(
-            title="اختر ملف Google Service Account JSON",
-            filetypes=[("JSON files", "*.json")]
-        )
-        if not creds_path:
-            raise RuntimeError("لم يتم اختيار ملف الخدمة (Service Account).")
-
-    creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(RUNTIME_SHEET_ID)
-    ws = sh.worksheet(RUNTIME_WORKSHEET_TITLE)
-
-    # احفظ العناوين إذا الورقة فارغة
-    header_row = ws.row_values(1)
-    if not any(header_row):
-        ws.insert_row(HEADERS, index=1)
-
-    # ✅ احفظ مسار ملف الخدمة للاستخدام اللاحق (إن لم يكن من المتغيّر البيئي)
-    try:
-        if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-            cfg = _load_cfg()
-            cfg["service_account_file"] = creds_path
-            _save_cfg(cfg)
-    except Exception:
-        pass
-
-    _WS = ws
-    return ws
-
-
-def append_task_row(row_values):
-    """إضافة صف واحد إلى الشيت بخيار USER_ENTERED (يحاكي إدخال المستخدم)."""
-    ws = get_worksheet()
-    ws.append_row(row_values, value_input_option="USER_ENTERED")
-    return ws
-
-def export_current_worksheet_to_csv(dest_path=None):
-    """
-    يحمّل كامل الورقة الحالية ويحفظها كـ CSV باسم:
-    "<Spreadsheet Title> - <Worksheet Title>.csv"
-    في نفس مجلد السكربت (أو داخل dest_path إذا كان مجلدًا)، مع الاستبدال عند وجود الملف.
-    """
-    ws = get_worksheet()
-    rows = ws.get_all_values()
-
-    # تنظيف الأسماء من الأحرف غير الصالحة لأسماء الملفات
-    def _safe(name: str) -> str:
-        return re.sub(r'[\\/:"*?<>|]+', "_", name).strip()
-
-    ss_title = _safe(ws.spreadsheet.title)
-    ws_title = _safe(ws.title)
-    filename = f"{ss_title} - {ws_title}.csv"
-
-    # تحديد المسار الناتج
-    script_dir = Path(__file__).resolve().parent
-    if dest_path is None:
-        out_path = script_dir / filename
-    else:
-        p = Path(dest_path)
-        out_path = (p / filename) if p.is_dir() else p  # دعم تمرير مجلد أو مسار ملف كامل
-
-    # UTF-8 with BOM لتحسين التوافق مع Excel
-    with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerows(rows)
-
-    return str(out_path)
-
-# كاش لمعرّفات المهام الموجودة
-_TASK_IDS = None
-
-def _load_task_ids(ws=None):
-    """تحميل كل قيم العمود A (Task ID) كـ set في الكاش."""
-    global _TASK_IDS
-    if ws is None:
-        ws = get_worksheet()
-    vals = ws.col_values(1)[1:]  # تجاهل صفّ العناوين
-    _TASK_IDS = {v.strip().lower() for v in vals if v and v.strip()}
-    return _TASK_IDS
-
-def task_id_exists(tid: str) -> bool:
-    """التحقّق السريع من التكرار من الكاش (ويُحمّل أول مرة عند الحاجة)."""
-    global _TASK_IDS
-    if _TASK_IDS is None:
-        _load_task_ids()
-    return tid.strip().lower() in _TASK_IDS
-
-def register_task_id(tid: str):
-    """تحديث الكاش محليًا بعد نجاح الإضافة."""
-    global _TASK_IDS
-    if _TASK_IDS is None:
-        _TASK_IDS = set()
-    _TASK_IDS.add(tid.strip().lower())
-
-
-_CFG_FILE = Path.home() / ".task_sheet_gui.json"
-
-def _load_cfg() -> dict:
-    try:
-        if _CFG_FILE.exists():
-            return json.loads(_CFG_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {}
-
-def _save_cfg(d: dict) -> None:
-    try:
-        _CFG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _CFG_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def compute_today_hours_from_current_sheet() -> float:
-    """
-    مجموع ساعات اليوم بالتاريخ المحلي (عمّان):
-    يجمع 'Task duration (hour)' لكل صف تاريخه في عمود 'Date' يساوي تاريخ اليوم (عمّان).
-    """
-    ws = get_worksheet()
-    values = ws.get_all_values()
-    if not values:
-        return 0.0
-
-    headers = values[0]
-    try:
-        idx_duration = headers.index("Task duration (hour)")
-        idx_date_loc = headers.index("Date")  # التاريخ المحلي
-    except ValueError:
-        return 0.0
-
-    today_local = datetime.now(JO_TZ).strftime("%Y-%m-%d")
-    total = 0.0
-    for row in values[1:]:
-        if len(row) <= max(idx_duration, idx_date_loc):
-            continue
-        if row[idx_date_loc].strip() == today_local:
-            try:
-                total += float((row[idx_duration] or "0").strip() or 0)
-            except Exception:
-                pass
-    return total
-
-
-def _open_external_spreadsheet():
-    # نفس منطق get_worksheet تمامًا لالتقاط ملف الاعتماد
-    creds_path = _get_service_account_path_from_env_or_cfg()
-    if not creds_path:
-        creds_path = filedialog.askopenfilename(
-            title="اختر ملف Google Service Account JSON",
-            filetypes=[("JSON files", "*.json")]
-        )
-        if not creds_path:
-            raise RuntimeError("لم يتم اختيار ملف الخدمة (Service Account).")
-
-    creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
-    gc = gspread.authorize(creds)
-
-    # احفظ المسار في الإعدادات إذا لم يأتِ من المتغير البيئي
-    try:
-        if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-            cfg = _load_cfg()
-            cfg["service_account_file"] = creds_path
-            _save_cfg(cfg)
-    except Exception:
-        pass
-
-    return gc.open_by_key(EXTERNAL_SHEET_ID)
-
-
-def update_daily_hours_in_external_sheet(total_hours_today: float) -> bool:
-    """
-    يحدّث خلية ساعات اليوم في ورقة Daily Hours (بالتاريخ المحلي).
-    يكتب فقط إذا تغيّرت القيمة عن الموجودة حاليًا.
-    يعيد True إذا تمّ التحديث، False إذا لم تتغير القيمة.
-    """
-    sh = _open_external_spreadsheet()
-    ws = sh.worksheet(DAILY_HOURS_SHEET)
-
-    data = ws.get_all_values()
-    if not data:
-        ws.append_row(["Name"])  # تهيئة رأس بسيط
-        data = ws.get_all_values()
-
-    headers = data[0] if data else ["Name"]
-    today_col_title = datetime.now(JO_TZ).strftime("%Y/%m/%d")  # yyyy/mm/dd (محلي)
-
-    # الحصول/إنشاء عمود التاريخ
-    try:
-        col_idx = headers.index(today_col_title) + 1  # 1-based
-    except ValueError:
-        ws.update_cell(1, len(headers) + 1, today_col_title)
-        col_idx = len(headers) + 1
-        headers.append(today_col_title)
-
-    # الحصول/إنشاء صف الاسم في العمود A
-    target_row_idx = None
-    for r, row in enumerate(data[1:], start=2):
-        if (row and row[0].strip()) == PERSON_FULLNAME_FOR_DAILY:
-            target_row_idx = r
-            break
-    if target_row_idx is None:
-        target_row_idx = len(data) + 1
-        ws.update_cell(target_row_idx, 1, PERSON_FULLNAME_FOR_DAILY)
-
-    # القراءة الحالية للمقارنة (قد تكون فارغة)
-    current_val = ws.cell(target_row_idx, col_idx).value or ""
-    try:
-        current_float = float(current_val)
-    except Exception:
-        current_float = None
-
-    new_val = round(float(total_hours_today), 2)
-
-    # اكتب فقط إذا اختلفت
-    if current_float is None or abs(current_float - new_val) > 1e-6:
-        ws.update_cell(target_row_idx, col_idx, f"{new_val:.2f}")
-        return True
-    return False
-
-def upsert_wfh_row_if_needed(total_hours_today: float) -> bool:
-    """
-    إذا (ساعات اليوم المحلي > 7) أضف صفًا واحدًا فقط في WFH:
-    [الاسم، تاريخ اليوم المحلي بصيغة yyyy-mm-dd].
-    يعيد True إذا أضيف الصف، False خلاف ذلك.
-    """
-    if total_hours_today <= 7.0:
-        return False
-
-    sh = _open_external_spreadsheet()
-    ws = sh.worksheet(WFH_SHEET)
-
-    values = ws.get_all_values()
-    today_iso = datetime.now(JO_TZ).strftime("%Y-%m-%d")
-
-    # منع التكرار لنفس اليوم
-    for row in values[1:]:
-        name = (row[0].strip() if len(row) > 0 else "")
-        d    = (row[1].strip() if len(row) > 1 else "")
-        if name == PERSON_NAME_FOR_WFH and d == today_iso:
-            return False  # موجود مسبقًا
-
-    ws.append_row([PERSON_NAME_FOR_WFH, today_iso], value_input_option="USER_ENTERED")
-    return True
+# Provide a GUI file-picker so the backend never needs to import tkinter
+_sb._creds_file_prompter = lambda: filedialog.askopenfilename(
+    title="اختر ملف Google Service Account JSON",
+    filetypes=[("JSON files", "*.json")]
+)
 
 
 
@@ -694,10 +402,7 @@ class SheetConfigPage(tk.Frame):
             return
 
         try:
-            global RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE, _WS, _TASK_IDS
-            RUNTIME_SHEET_ID, RUNTIME_WORKSHEET_TITLE = sid, wst
-            _WS = None
-            _TASK_IDS = None
+            set_runtime_config(sid, wst)
             get_worksheet()
             # حفظ آخر قيم ناجحة
             try:
