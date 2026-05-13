@@ -1,0 +1,9 @@
+# Runtime dependencies
+gspread>=6.0
+google-auth>=2.0
+
+# Optional GUI theme (not required for tests or headless runs)
+# sv-ttk
+
+# Test dependencies
+pytest>=8.0
