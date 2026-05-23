@@ -1,182 +1,205 @@
-# Tasks_Performance
+# Tasks Performance
 
-A lightweight **Tkinter GUI** for logging daily tasks into **Google Sheets**, with automatic time tracking and optional updates to a separate “Daily Hours” / “WFH” spreadsheet.
+A lightweight Tkinter desktop app for logging task work into Google Sheets.
 
-The app is designed around a simple flow:
+The app guides you through a simple workflow:
 
-1. **Start**
-2. **Google Sheets configuration**
-3. **Fill task form + timer**
-4. **Post-add actions / Finish (export CSV + update external sheets)**
-
----
+1. Start the session.
+2. Connect to a Google Sheets spreadsheet and worksheet.
+3. Fill in task details while the built-in timer tracks duration.
+4. Add more tasks or finish the session, with optional CSV export and daily-hours updates.
 
 ## Features
 
-- **GUI task entry** (Tkinter + ttk)
-- **Google Sheets append** via `gspread` + Google Service Account credentials
-- **Task timer** (auto starts when opening the form; can reset)
-- **Validation**
-  - `Task ID` must match: `^[0-9a-f]{24}$` (24 lowercase hex characters)
-  - Prevents duplicate `Task ID`s (loads column A, caches IDs, plus a final server-side check before append)
-- **Dual timezones**
-  - Local: **Asia/Amman (JOR)**
-  - US: **America/Los_Angeles (US)**
-- **OT field** with automatic defaulting and day-rollover prompt logic (based on LA weekday)
-- **Daily stats** shown in the UI (for Amman “today”):
-  - number of tasks submitted today
-  - total hours today
-- **Export current worksheet to CSV** on finish
-- **Optional external spreadsheet updates** on finish:
-  - Update “Daily Hours” cell for today
-  - Insert into “WFH” sheet if today’s hours > 7 (and prevent duplicates)
+- Tkinter + ttk GUI with optional `sv-ttk` theme support.
+- Google Sheets integration through `gspread` and a Google Service Account.
+- Automatic header insertion when the selected worksheet is empty.
+- Task timer that starts when the task form opens and can be reset.
+- Task ID validation:
+  - Must match `^[0-9a-f]{24}$`.
+  - Duplicate IDs are blocked with a local cache and a final sheet-side check before append.
+- Local and US time tracking:
+  - Local timezone: `Asia/Amman`.
+  - US timezone: `America/Los_Angeles`.
+- OT defaulting based on the Los Angeles weekday, with rollover prompts when the LA day changes.
+- Daily stats in the UI for tasks and hours submitted today.
+- CSV export of the current worksheet.
+- Optional external spreadsheet update on finish:
+  - Updates the `Daily Hours` worksheet for today's total.
+  - Adds a `WFH` row when today's total is greater than 7 hours, avoiding duplicates.
+- Unit tests for config, persistence, and Google Sheets backend behavior.
 
----
+## Repository Structure
 
-## Repository contents
-
-- `task_sheet_gui.py` — main application script (GUI + Google Sheets integration)
-
----
+```text
+.
+|-- cfg_store.py          # Local config persistence and credential path lookup
+|-- config.py             # Shared constants, headers, regex, scopes, timezones
+|-- sheets_backend.py     # Google Sheets access, CSV export, task ID cache, aggregations
+|-- task_sheet_gui.py     # Tkinter application
+|-- requirements.txt      # Runtime and test dependencies
+|-- tests/                # Pytest suite with mocked Google Sheets calls
+`-- README.md
+```
 
 ## Requirements
 
-- Python **3.10+** (uses `zoneinfo`)
-- Packages:
-  - `gspread`
-  - `google-auth`
-  - Optional theme: `sv-ttk`
+- Python 3.10 or newer.
+- A Google Cloud service account JSON key.
+- Access to the target Google Sheet shared with the service account email.
 
-Install:
+Install dependencies:
 
-```bash
-pip install gspread google-auth
-# optional:
-pip install sv-ttk
+```powershell
+python -m pip install -r requirements.txt
 ```
 
----
+Optional GUI theme:
 
-## Google Service Account setup
+```powershell
+python -m pip install sv-ttk
+```
 
-1. Create a **Service Account** in Google Cloud.
-2. Create and download its **JSON key**.
-3. Share your target Google Sheet with the service account email (Editor access).
+## Google Service Account Setup
 
-The app will look for credentials in this order:
+1. Create a service account in Google Cloud.
+2. Create and download a JSON key for that service account.
+3. Share the target Google Sheet with the service account email using Editor access.
 
-1. Environment variable `GOOGLE_APPLICATION_CREDENTIALS` (preferred)
-2. Saved path in `~/.task_sheet_gui.json`
-3. If neither is available, it will prompt you to choose the JSON file via a file picker
+The app resolves credentials in this order:
 
-### Recommended: set credentials via environment variable
+1. `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
+2. Saved `service_account_file` path in `~/.task_sheet_gui.json`.
+3. GUI file picker, if no valid saved path is found.
 
-**macOS/Linux**
+PowerShell example:
+
+```powershell
+$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\service_account.json"
+python task_sheet_gui.py
+```
+
+macOS/Linux example:
+
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account.json"
 python task_sheet_gui.py
 ```
 
-**Windows (PowerShell)**
+## Run The App
+
 ```powershell
-$env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\service_account.json"
 python task_sheet_gui.py
 ```
 
----
+On the Google Sheets settings screen, enter:
 
-## How to run
+- `Spreadsheet ID`
+- `Worksheet title`
 
-```bash
-python task_sheet_gui.py
+Successful values are saved in `~/.task_sheet_gui.json` for future sessions.
+
+## Usage
+
+1. Start the app.
+2. Open the Google Sheets settings screen.
+3. Enter the spreadsheet ID and worksheet title.
+4. Confirm or adjust the OT value.
+5. Fill in the task form:
+   - Task ID
+   - Prompt
+   - Justification
+   - Feedback
+   - Rating
+   - Project
+   - Level
+   - Verdict
+6. Add the task once the button is enabled.
+7. Add another task or finish the session.
+
+When finishing, the app asks whether to export the current worksheet to CSV. It then attempts to update the configured external `Daily Hours` and `WFH` worksheets.
+
+## Sheet Columns
+
+Rows are appended in the order defined by `HEADERS` in `config.py`:
+
+```text
+Task ID, The prompt, Justification, Feedback, Rating,
+Project, Task duration (hour), Level, Verdict,
+Date, Day, Year, Month, Month (num),
+Started Time, Submitted time,
+Date (US), Day (US), Year (US), Month (US), Month (num_US),
+Started Time (US), Submitted time (US), OT
 ```
 
----
+If the target worksheet is empty, these headers are inserted automatically in row 1.
 
-## Usage guide
+## Configuration
 
-### 1) Start page
-Click **ابدأ العمل**.
+Local app settings are saved in:
 
-### 2) Google Sheets settings
-Enter:
-- **Spreadsheet ID**
-- **Worksheet title**
+```text
+~/.task_sheet_gui.json
+```
 
-These values are saved for next time in:
-- `~/.task_sheet_gui.json`
+The file may contain:
 
-You can also:
-- Clear saved service account file path
-- Clear saved sheet settings
+```json
+{
+  "sheet_id": "your-spreadsheet-id",
+  "worksheet": "your-worksheet-title",
+  "service_account_file": "C:\\path\\to\\service_account.json"
+}
+```
 
-An **OT?** dropdown is shown on this page as well.
+External daily-hours integration is configured in `config.py`:
 
-### 3) Task form
-Fill in the task fields and click **إضافة المهمة** once enabled.
+```python
+EXTERNAL_SHEET_ID = "..."
+DAILY_HOURS_SHEET = "Daily Hours"
+WFH_SHEET = "WFH"
+PERSON_FULLNAME_FOR_DAILY = "..."
+PERSON_NAME_FOR_WFH = "..."
+```
 
-**Button enable rules**
-- Task ID is valid and unique
-- Rating is either blank or numeric
+If you do not use the external daily-hours workflow, disable or remove the calls to `update_daily_hours_in_external_sheet()` and `upsert_wfh_row_if_needed()` in `PostAddPage.finish_work()`.
 
-The app records both:
-- Amman-local date/time fields
-- Los Angeles date/time fields
+## Tests
 
-### 4) Finish work
-Click **إنهاء العمل**.
-- The app asks if you want to export the current worksheet to a CSV.
-- Then it attempts to update the external “Daily Hours” / “WFH” spreadsheet (if configured in the code).
-- App closes.
+Run the test suite:
 
----
+```powershell
+python -m pytest tests/ -v
+```
 
-## Data written to the sheet
+The backend tests mock Google Sheets API calls, so they do not need real credentials or network access.
 
-The script maintains a `HEADERS` list that defines the exact order of columns appended. The row includes:
-
-- Task ID
-- Prompt / Justification / Feedback
-- Rating, Project, Duration (hours), Level, Verdict
-- Date/time fields for **Amman** and **Los Angeles**
-- OT flag
-
-If the worksheet is empty, the app inserts the headers automatically.
-
----
-
-## Configuration notes (important)
-
-Inside `task_sheet_gui.py` there are hard-coded values for an external spreadsheet update feature:
-
-- `EXTERNAL_SHEET_ID`
-- `DAILY_HOURS_SHEET`
-- `WFH_SHEET`
-- `PERSON_FULLNAME_FOR_DAILY`
-- `PERSON_NAME_FOR_WFH`
-
-If you don’t use this feature, you can keep them as-is, or remove/disable the external update calls in `PostAddPage.finish_work()`.
-
----
+GitHub Actions runs the tests on Python 3.11 and 3.12.
 
 ## Troubleshooting
 
-### “Failed to open worksheet / permission denied”
-- Ensure the **sheet is shared** with your service account email.
-- Ensure Spreadsheet ID and Worksheet title are correct.
+### Permission denied or worksheet not found
 
-### The “Add task” button is disabled
-- Confirm Task ID is exactly **24 hex characters** (0-9, a-f)
-- Make sure the Task ID is **not already present** in column A
+- Make sure the Google Sheet is shared with the service account email.
+- Confirm that the spreadsheet ID is correct.
+- Confirm that the worksheet title matches the tab name exactly.
 
-### Timezones look wrong
-- The app uses:
-  - `America/Los_Angeles`
-  - `Asia/Amman`
-- Ensure your Python version supports `zoneinfo` properly (Python 3.10+ recommended).
+### Add task button stays disabled
 
----
+- The Task ID must be exactly 24 lowercase hex characters.
+- The Task ID must not already exist in column A.
+- Rating must be blank or numeric.
+
+### Credentials are not picked up
+
+- Check that `GOOGLE_APPLICATION_CREDENTIALS` points to an existing JSON file.
+- Use the app button to clear the saved service-account path, then select the JSON file again.
+- Delete or edit `~/.task_sheet_gui.json` if the saved path is stale.
+
+### Time fields look unexpected
+
+The app writes both Amman and Los Angeles timestamps. OT defaults are based on the Los Angeles date, while today's daily-hours total is computed using the Amman date.
 
 ## License
 
-No license file is currently included. If you want, add a `LICENSE` file (MIT/Apache-2.0/etc.) and update this section.
+No license file is currently included.
